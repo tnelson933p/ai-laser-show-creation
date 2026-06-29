@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+            arch: 'Apple Silicon'
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+            arch: 'Intel Mac'
+          - platform: windows-latest
+            args: ''
+            arch: 'Windows x64'
+
+    runs-on: ${{ matrix.platform }}
+    name: Build (${{ matrix.arch }})
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './laser-show/src-tauri -> target'
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        working-directory: laser-show
+        run: npm install
+
+      - name: Install macOS dependencies
+        if: matrix.platform == 'macos-latest'
+        run: |
+          brew install pkg-config
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        with:
+          projectPath: laser-show
+          tagName: ${{ github.ref_name }}
+          releaseName: 'AI LaserShow Client ${{ github.ref_name }}'
+          releaseBody: |
+            ## AI LaserShow Client ${{ github.ref_name }}
+
+            ### Downloads
+            - **Windows**: Download the `.msi` installer or `.exe` setup file
+            - **macOS (Apple Silicon)**: Download the `aarch64.dmg`
+            - **macOS (Intel)**: Download the `x86_64.dmg`
+
+            ### Hardware Requirements
+            - USB-to-DMX adapter (FTDI or CH340 chipset)
+            - Compatible animation laser (Eytse EY003-L or Generic 7-channel)
+
+            ### Usage
+            1. Connect your USB-to-DMX adapter
+            2. Launch the app and select your laser brand
+            3. Choose the detected COM port
+            4. Drag in an audio file (.mp3 or .wav)
+            5. Press Play — the show runs automatically
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

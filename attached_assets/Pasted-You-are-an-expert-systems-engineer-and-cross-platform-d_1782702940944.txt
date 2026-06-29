@@ -1,0 +1,51 @@
+You are an expert systems engineer and cross-platform desktop application architect. Create a standalone desktop application called "AI LaserShow Client" using the Tauri framework (Rust backend + TypeScript/HTML frontend). The goal is a pre-compiled application distributed via GitHub Releases that does NOT require a local Python installation.
+
+### PHASE 1: TAURI & GITHUB PIPELINE ARCHITECTURE
+1. GITHUB ACTIONS BUNDLER:
+   - Create a `.github/workflows/release.yml` file using the official `tauri-apps/tauri-action`.
+   - Configure the workflow matrix to automatically compile production binaries for Windows (x64 `.exe`/`.msi`) and macOS (Intel/Apple Silicon `.dmg`) whenever a tag is pushed.
+   - The workflow must package these binaries directly into a GitHub Release artifact download link.
+
+2. RUNTIME ENVIRONMENT:
+   - Ensure the application runs 100% locally as a compiled desktop binary.
+   - Front-end: Use HTML5 canvas and Web Audio API for fluid layout UI elements.
+   - Back-end: Use a native Rust core to interface safely with low-level local OS drivers.
+
+### PHASE 2: INITIAL USER SETUP & HARDWARE COMPATIBILITY
+1. BRAND AND DRIVER SELECTION:
+   - On initial launch, block the main interface until hardware configuration parameters are set.
+   - Present a clear selection dropdown labeled "Select Laser Brand". Pre-populate options with:
+     * "Eytse EY003-L (16-Channel Mode)" [Default]
+     * "Generic DJ Animation Laser (7-Channel Mode)"
+     * "Custom Laser Array (User-Mapped Matrix)"
+   - Provide a dynamic serial interface list. Use Rust's `serialport::available_ports()` to scan and present active local USB-to-DMX serial COM nodes.
+
+2. CORE SERIAL COMMUNICATION LAYER:
+   - Integrate the native Rust `serialport` crate configured strictly to standard DMX512 parameters: Baud Rate: 250,000, Data Bits: 8, Stop Bits: 2, Parity: None.
+   - Code the data-packet loop to structure native byte packets consisting of a distinct serial break, a mark-after-break pulse, a 0x00 start byte, and a continuous 16-to-512 byte stream array.
+
+### PHASE 3: AI AUDIO ANALYSIS ENGINE
+1. AUDIO PIPELINE:
+   - Build a file-drop UI area. When an audio file (.mp3 or .wav) is dragged into the app, stream the raw audio binary across the Tauri bridge to the Rust backend.
+   - Use the Rust `rodio` or `symphonia` crates to decode the audio stream and play it directly through local hardware audio drivers.
+
+2. REAL-TIME MATH TRANSLATION MATRIX:
+   - Implement an automated frequency envelope extraction system in the native backend thread.
+   - Divide audio spectral frequencies into three real-time automation streams updated via a 40Hz (25ms) timer clock:
+     * Bass Channel (Low-end transients, beat thumps)
+     * Mid-Range Channel (Melody tracking, vocal frequencies)
+     * High-End Channel (Snares, hi-hats, percussive spikes)
+
+### PHASE 4: AUTOMATION SCHEMATIC (EYTSE EY003-L SPECIFIC)
+1. DMX ARRAY BINDINGS:
+   If the "Eytse EY003-L" profile is loaded, calculate and map the 40Hz output arrays as follows:
+   - Byte 1 (Mode Control): Hold statically at 120 to lock the laser into computer DMX tracking.
+   - Byte 2 (Animation Catalog) & Bytes 3-4 (Pattern Index): Step to new graphic presets instantly when mid-range melody envelopes shift tracking weights.
+   - Bytes 5-8 (X/Y Geometry & Rotation): Drive coordinate positions using trigonometric sine loops scaled relative to the song's calculated tempo envelope.
+   - Bytes 9-10 (Zoom Size): Standard state at 100. Snap instantly to 255 on distinct sub-bass spikes, trailing off smoothly using an exponential decay modifier.
+   - Byte 11 (Strobe Mode): Tie to high-end percussion frequencies to flash the physical diodes on beat hits.
+   - Bytes 12-14 (RGB Channels): Route Red directly to Bass amplitude, Green to Mid-Range prominence, and Blue to High-End presence.
+   - Bytes 15-16 (Optical Grating Effects): Activate mirror variations during dense, high-volume tracking bars.
+
+2. GENERIC COMPRESSION SCHEMA:
+   If the "Generic 7-Channel" mode is selected, condense the target tracking calculations to populate standard 7-channel indices cleanly (Mode, Pattern, Strobe, Zoom, X/Y, Color Index).
