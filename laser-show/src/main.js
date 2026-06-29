@@ -476,6 +476,22 @@ async function stopPlayback() {
   iconStop.classList.add('hidden');
 }
 
+// ── Cable type toggle ─────────────────────────────────────────────────────────
+let selectedCableType = 'enttec-pro';
+const cableHints = {
+  'enttec-pro': '57 600 baud · ENTTEC USB Pro protocol',
+  'raw':        '250 000 baud · raw DMX512 (8N2) with BREAK',
+};
+document.querySelectorAll('.cable-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.cable-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedCableType = btn.dataset.value;
+    const hint = document.getElementById('cable-hint');
+    if (hint) hint.textContent = cableHints[selectedCableType] || '';
+  });
+});
+
 // ── Port loading ──────────────────────────────────────────────────────────────
 loadPorts(comPort);
 refreshPorts.addEventListener('click', () => loadPorts(comPort));
@@ -496,7 +512,7 @@ btnConnect.addEventListener('click', async () => {
   btnConnect.textContent = 'Connecting…';
 
   try {
-    await invoke('connect_dmx', { port });
+    await invoke('connect_dmx', { port, cableType: selectedCableType });
     await invoke('set_laser_profile', { profile: profileKey });
 
     state.connected = true;
@@ -613,7 +629,7 @@ $('btn-reconnect').addEventListener('click', async () => {
   const laser = getLaser(brand, model);
   const profileKey = laser?.channels === 7 ? 'Generic7Channel' : 'EytseEY003L';
   try {
-    await invoke('connect_dmx', { port });
+    await invoke('connect_dmx', { port, cableType: selectedCableType });
     await invoke('set_laser_profile', { profile: profileKey });
     state.port  = port;
     state.brand = brand;

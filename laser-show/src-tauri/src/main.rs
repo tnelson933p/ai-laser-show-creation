@@ -5,7 +5,8 @@ mod dmx;
 
 use audio::{analyze_file, bpm_phase_at, AudioData};
 use dmx::{
-    build_eytse_packet, build_generic7_packet, DmxController, FrequencyEnvelopes, LaserProfile,
+    build_eytse_packet, build_generic7_packet, CableType, DmxController, FrequencyEnvelopes,
+    LaserProfile,
 };
 
 use parking_lot::Mutex;
@@ -48,9 +49,16 @@ fn list_serial_ports() -> Vec<String> {
     DmxController::list_ports()
 }
 
+/// `cable_type` must be either `"enttec-pro"` or `"raw"`.
+/// ENTTEC Pro / SoundSwitch adapters: 57600 baud, 1 stop bit, ENTTEC envelope.
+/// Generic Open DMX / raw adapters:   250000 baud, 2 stop bits, BREAK + data.
 #[tauri::command]
-fn connect_dmx(port: String, state: State<AppState>) -> Result<(), String> {
-    state.dmx.connect(&port).map_err(|e| e.to_string())
+fn connect_dmx(port: String, cable_type: String, state: State<AppState>) -> Result<(), String> {
+    let ct = match cable_type.as_str() {
+        "raw" => CableType::Raw,
+        _ => CableType::EnttecPro,
+    };
+    state.dmx.connect(&port, ct).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -86,8 +94,6 @@ async fn load_audio(
     Ok(analysis)
 }
 
-/// Returns the current real-time envelope values (polled by the frontend at
-/// ~40 Hz to drive the spectrum visualiser).
 #[tauri::command]
 fn get_current_envelopes(state: State<AppState>) -> Option<serde_json::Value> {
     let guard = state.audio.lock();
@@ -107,7 +113,7 @@ fn get_current_envelopes(state: State<AppState>) -> Option<serde_json::Value> {
 
 #[tauri::command]
 fn start_playback(
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     state: State<AppState>,
 ) -> Result<(), String> {
     if state.playback_running.load(Ordering::Relaxed) {
@@ -125,43 +131,36 @@ fn start_playback(
     let running = Arc::new(AtomicBool::new(true));
     let frame_counter = Arc::new(AtomicU64::new(0));
 
-    // Clone handles for the DMX thread
-    let port_handle = state.dmx.port_handle();
+    // Clone the full DmxController so the DMX thread owns it and can call
+    // send_packet() — which handles BREAK generation and ENTTEC framing.
+    let dmx = state.dmx.clone();
     let profile = state.profile.lock().clone();
     let running_clone = Arc::clone(&running);
     let frame_clone = Arc::clone(&frame_counter);
     let audio_clone = Arc::clone(&audio);
 
-    // Store running flag in state so stop_playback can flip it
     state.playback_running.store(true, Ordering::Relaxed);
 
-    // ── Audio playback thread (rodio) ─────────────────────────────────────
+    // ── Audio playback thread (rodio) ──────────────────────────────────────
     let samples = audio.samples.clone();
     let sample_rate = audio.analysis.sample_rate;
     let _audio_thread = std::thread::spawn(move || {
         use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
         let (_stream, stream_handle) = match OutputStream::try_default() {
             Ok(v) => v,
-            Err(e) => {
-                eprintln!("Audio output error: {}", e);
-                return;
-            }
+            Err(e) => { eprintln!("Audio output error: {}", e); return; }
         };
         let sink = match Sink::try_new(&stream_handle) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!("Sink error: {}", e);
-                return;
-            }
+            Err(e) => { eprintln!("Sink error: {}", e); return; }
         };
         let source = SamplesBuffer::new(1, sample_rate, samples);
         sink.append(source);
         sink.sleep_until_end();
     });
 
-    // ── 40 Hz DMX loop thread ─────────────────────────────────────────────
+    // ── 40 Hz DMX loop thread ──────────────────────────────────────────────
     std::thread::spawn(move || {
-        const FRAME_PERIOD: Duration = Duration::from_millis(25); // 40 Hz
         let start = Instant::now();
 
         loop {
@@ -194,22 +193,16 @@ fn start_playback(
                 LaserProfile::Custom => [0u8; 16],
             };
 
-            // Send via DMX (non-fatal if not connected)
-            let mut guard = port_handle.lock();
-            if let Some(port) = guard.as_mut() {
-                let mut data = Vec::with_capacity(1 + packet.len());
-                data.push(0x00);
-                data.extend_from_slice(&packet);
-                let _ = port.write_all(&data);
-                let _ = port.flush();
-            }
-            drop(guard);
+            // Use send_packet() so BREAK generation and ENTTEC framing are
+            // handled correctly — raw port writes were previously missing the
+            // DMX BREAK condition entirely.
+            let _ = dmx.send_packet(&packet);
 
             // Busy-wait to hit the next 25ms boundary exactly
-            let next_frame_time = start + Duration::from_millis(((frame_idx + 1) * 25) as u64);
+            let next = start + Duration::from_millis(((frame_idx + 1) * 25) as u64);
             let now = Instant::now();
-            if next_frame_time > now {
-                std::thread::sleep(next_frame_time - now);
+            if next > now {
+                std::thread::sleep(next - now);
             }
         }
     });
