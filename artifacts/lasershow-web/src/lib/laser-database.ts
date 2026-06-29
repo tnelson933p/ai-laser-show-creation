@@ -79,7 +79,34 @@ export const LASER_BRANDS: Record<string, string[]> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: build standard 16-ch Eytse-style map
+// Helper: correct 15-channel map for Eytse EY003-L
+// Confirmed per Eytse manual / Gemini verification — NOT raw RGB, uses indexed color
+// ─────────────────────────────────────────────────────────────────────────────
+function ey003lChannelMap(): ChannelDef[] {
+  return [
+    { ch: 1,  name: "Mode",           fn: "mode",        defaultVal: 120,
+      ranges: [{lo:0,hi:50,label:"Blackout"},{lo:51,hi:100,label:"Auto"},{lo:101,hi:150,label:"DMX Control"},{lo:151,hi:200,label:"Sound Active"},{lo:201,hi:255,label:"Master"}] },
+    { ch: 2,  name: "Pattern Group",  fn: "animBank",    defaultVal: 0,
+      ranges: [{lo:0,hi:63,label:"Group 1"},{lo:64,hi:127,label:"Group 2"},{lo:128,hi:191,label:"Group 3"},{lo:192,hi:255,label:"Group 4"}] },
+    { ch: 3,  name: "Pattern Choice", fn: "pattern",     defaultVal: 40 },
+    { ch: 4,  name: "Strobe Speed",   fn: "strobe",      defaultVal: 0,
+      ranges: [{lo:0,hi:0,label:"Off"},{lo:1,hi:50,label:"Slow"},{lo:51,hi:200,label:"Fast"},{lo:201,hi:255,label:"Ultra"}] },
+    { ch: 5,  name: "X-Axis Move",    fn: "xPos",        defaultVal: 127 },
+    { ch: 6,  name: "Y-Axis Move",    fn: "yPos",        defaultVal: 127 },
+    { ch: 7,  name: "X-Axis Zoom",    fn: "zoom",        defaultVal: 100 },
+    { ch: 8,  name: "Y-Axis Zoom",    fn: "size",        defaultVal: 100 },
+    { ch: 9,  name: "Color Select",   fn: "color",       defaultVal: 220,
+      ranges: [{lo:0,hi:50,label:"White/Auto"},{lo:51,hi:100,label:"Red"},{lo:101,hi:150,label:"Green"},{lo:151,hi:200,label:"Blue"},{lo:201,hi:255,label:"Multi-Color"}] },
+    { ch: 10, name: "Rotation",       fn: "rotation",    defaultVal: 127 },
+    { ch: 11, name: "X Roll (3D)",    fn: "xRoll",       defaultVal: 0 },
+    { ch: 12, name: "Y Roll (3D)",    fn: "yRoll",       defaultVal: 0 },
+    { ch: 13, name: "Draw Speed",     fn: "drawSpeed",   defaultVal: 128 },
+    { ch: 14, name: "Pattern Size",   fn: "patternSize", defaultVal: 128 },
+    { ch: 15, name: "Segment Count",  fn: "segments",    defaultVal: 0 },
+  ];
+}
+
+// Helper: generic 16-ch map used by most other brands as a placeholder
 // ─────────────────────────────────────────────────────────────────────────────
 function eytseChannelMap(): ChannelDef[] {
   return [
@@ -620,12 +647,12 @@ export const LASER_DATABASE: LaserModel[] = [
   // ── EYTSE ────────────────────────────────────────────────────────────────
   {
     id: "eytse-ey003l",
-    brand: "Eytse", model: "EY003-L (16-ch)",
-    channelCount: 16,
-    channelMap: eytseChannelMap(),
+    brand: "Eytse", model: "EY003-L (15-ch)",
+    channelCount: 15,
+    channelMap: ey003lChannelMap(),
     scanTier: "mid",
-    colorMode: "rgb-full",
-    availableColors: ["Red", "Green", "Blue"],
+    colorMode: "indexed",
+    availableColors: ["Red", "Green", "Blue", "Multi-Color"],
     maxPowerMw: 2000,
     builtInPatterns: 200,
     scanAngleDeg: 45,
@@ -634,17 +661,21 @@ export const LASER_DATABASE: LaserModel[] = [
       "Blue-dominant output — cyan/blue/violet appear brightest",
       "200+ built-in 3D animations & aerial geometry patterns",
       "50 holiday/Christmas themed patterns",
-      "16-ch full DMX512 In/Out",
+      "15-ch DMX512 In/Out (indexed color, not raw RGB)",
       "Bluetooth Light Elf app — custom text, freehand drawing, 20-scene show builder",
       "Sound-active / mic mode",
       "Master/Slave daisy-chain via DMX",
       "Auto mode (standalone loop)",
     ],
     strategy: {
-      ...RGB_STRATEGY,
+      ...INDEXED_STRATEGY,
+      bassChannels: ["zoom", "patternSize", "segments"],
+      midChannels: ["pattern", "animBank", "drawSpeed"],
+      highChannels: ["strobe", "xRoll"],
       movementStyle: "lissajous",
+      bassThreshold: 0.55,
       patternShiftBeats: 8,
-      notes: "EY003-L — 2W total RGB (R 450mW / G 350mW / B 1200mW). Blue diode is 60% of total power, so pure blue beams are strikingly bright while red is the weakest color — push red intensity higher to compensate. Lock CH1 to 120 (DMX remote control mode) at all times. Grating effects (CH15-16) are highly visible — engage from 65% average energy upward. Standard BPM-locked Lissajous on X/Y with rotation at 1/2 BPM. Scanner is mid-tier (~15 KPPS): keep Lissajous ratios at 1:1, 2:1, 3:2 for clean shapes — avoid 5:4 or higher which may flicker at this scanner speed. At 2W the beams are visible overhead without haze but benefit significantly from light fog/haze. High energy sections fully support grating fan-out across the room."
+      notes: "EY003-L — 15-ch DMX (NOT 16-ch). Uses indexed color selection on CH9, not raw RGB. CH1=120 activates DMX Control mode. CH4 is strobe speed (0=off). CH7/CH8 are separate X/Y zoom — drive both with bass for kick snaps. CH9 color zones: 51-100=Red (bass), 101-150=Green (mid), 151-200=Blue (high), 201-255=Multi-color (ambient). CH11/CH12 are 3D roll effects — activate only on peak energy (>80%). CH13 drawing speed affects how fast the vector path renders — higher = tighter shapes. CH15 segment count multiplies/mirrors the pattern for fan-out effects at high energy. Scanner is mid-tier (~15 KPPS): keep Lissajous ratios at 1:1, 2:1, 3:2 — avoid 5:4 or higher. At 2W visible overhead without haze but benefits from light fog."
     }
   },
   {

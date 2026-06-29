@@ -40,7 +40,7 @@ const LASER_DB = {
     { id: "beamz-scorpion-rgy",  model: "Scorpion MKII RGY", channels: 7,  scanTier: "budget", colorMode: "rgy",      mW: 80,  notes: "Budget RGY. Cycle: red→yellow→green→off. Step every 4 beats. Zoom stays 85%+ always." },
   ],
   "Eytse": [
-    { id: "eytse-ey003l", model: "EY003-L (16-ch)", channels: 16, scanTier: "mid",  colorMode: "rgb-full", mW: 300, notes: "Reference laser for this system. CH1 locked to 120. Grating from 65% energy. Lissajous X/Y with rotation at 1/2 BPM." },
+    { id: "eytse-ey003l", model: "EY003-L (15-ch)", channels: 15, scanTier: "mid",  colorMode: "indexed", mW: 2000, notes: "15-ch indexed-color DMX. CH1=120 for DMX mode. CH9 color: 51-100=Red, 101-150=Green, 151-200=Blue, 201-255=Multi. CH7/8 X/Y Zoom snap on bass. CH15 segment count fans out on peaks." },
     { id: "eytse-ey006l", model: "EY006-L (16-ch)", channels: 16, scanTier: "fast", colorMode: "rgb-full", mW: 600, notes: "600mW with faster scanner. Complex 3:2 and 4:3 Lissajous cleanly. Lower bass threshold to 50%. 16-beat pattern cycles." },
   ],
   "Generic / Budget": [
@@ -49,10 +49,12 @@ const LASER_DB = {
   ],
 };
 
+// Correct 15-channel map per EY003-L manual
 const EYTSE_CHANNEL_NAMES = [
-  'Mode','Anim Bank','Pattern Lo','Pattern Hi',
-  'X Position','Y Position','Rotation','Rot Speed',
-  'Zoom','Size Scale','Strobe','Red','Green','Blue','Grating','Grating Rot',
+  'Mode','Pattern Group','Pattern Choice','Strobe Speed',
+  'X-Axis Move','Y-Axis Move','X-Axis Zoom','Y-Axis Zoom',
+  'Color Select','Rotation','X Roll (3D)','Y Roll (3D)',
+  'Draw Speed','Pattern Size','Segment Count',
 ];
 const GENERIC7_CHANNEL_NAMES = [
   'Mode','Pattern','Strobe','Zoom','X Position','Y Position','Color Index',
@@ -391,22 +393,44 @@ function computeDmx(bass, mid, high, bpm, elapsed) {
     ch[5] = Math.round(yNorm * 255);
     ch[6] = Math.round((elapsed * 0.1 * 255) % 255);
   } else {
+    // ── EY003-L correct 15-channel mapping ──────────────────────────────────
+    // CH1  Mode Selection  — 120 locks DMX Control mode
     ch[0]  = 120;
-    ch[1]  = 0;
+    // CH2  Pattern Group   — slow bank cycling (~20 s per group, 4 groups)
+    const bankIdx = Math.floor(elapsed / (beatDur * Math.max(shiftBeats, 8))) % 4;
+    ch[1]  = bankIdx * 64;
+    // CH3  Pattern Choice  — specific animation driven by mid+high
     ch[2]  = Math.round((pidx / LISSAJOUS.length) * 200 + 20);
-    ch[3]  = 0;
+    // CH4  Strobe Speed    — 0 = off; only on peak hi-hat + energy
+    ch[3]  = (high > 0.75 && energy > 0.65) ? Math.round(50 + high * 150) : 0;
+    // CH5  X-Axis Move     — BPM-locked horizontal sweep
     ch[4]  = Math.round(xNorm * 255);
+    // CH6  Y-Axis Move     — BPM-locked vertical sweep
     ch[5]  = Math.round(yNorm * 255);
-    ch[6]  = Math.round(rotation);
-    ch[7]  = 0;
-    ch[8]  = zoom;
-    ch[9]  = Math.round(zoom * 0.85);
-    ch[10] = strobe;
-    ch[11] = Math.round(Math.min(255, red));
-    ch[12] = Math.round(Math.min(255, green));
-    ch[13] = Math.round(Math.min(255, blue));
-    ch[14] = grating;
-    ch[15] = gratingRot;
+    // CH7  X-Axis Zoom     — bass-reactive width snap
+    ch[6]  = zoom;
+    // CH8  Y-Axis Zoom     — slightly tighter for depth feel
+    ch[7]  = Math.round(zoom * 0.92);
+    // CH9  Color Selection — indexed zones (NOT raw RGB):
+    //   ~51-100=Red  ~101-150=Green  ~151-200=Blue  ~201-255=Multi-color
+    if      (bass > 0.65)  ch[8] = 70;   // Red — kick/sub
+    else if (mid  > 0.60)  ch[8] = 120;  // Green — melody
+    else if (high > 0.60)  ch[8] = 170;  // Blue — hi-hat/snare
+    else                   ch[8] = 220;  // Multi-color — ambient
+    // CH10 Rotation       — continuous 2D rotation
+    ch[9]  = Math.round(rotation);
+    // CH11 X Roll (3D)    — barrel roll on strong bass drops
+    ch[10] = bass > 0.80 ? Math.round(bass * 180) : 0;
+    // CH12 Y Roll (3D)    — vertical flip on strong mid peaks
+    ch[11] = mid  > 0.75 ? Math.round(mid  * 150) : 0;
+    // CH13 Drawing Speed  — faster on high energy
+    ch[12] = Math.round(100 + energy * 155);
+    // CH14 Pattern Size   — master scale, bass-driven
+    ch[13] = zoom;
+    // CH15 Segment Count  — fan-out / mirror on peaks
+    ch[14] = (energy > 0.65 && energy > avgE * 1.1) ? Math.round(100 + energy * 155) : 0;
+    // CH16 unused (15-ch fixture)
+    ch[15] = 0;
   }
   return ch.slice(0, laser.channels);
 }

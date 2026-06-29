@@ -147,59 +147,108 @@ pub enum LaserProfile {
     Custom,
 }
 
-/// Build a 16-element DMX channel array for the Eytse EY003-L (16-ch mode).
+/// Build a DMX channel array for the Eytse EY003-L — 15-channel protocol.
+///
+/// Confirmed channel map (per Eytse EY003-L manual / Gemini verification):
+///   CH1  Mode Selection        — 101-150 = DMX Control mode (lock to 120)
+///   CH2  Pattern Group         — selects animation category (4 groups × 64)
+///   CH3  Pattern Choice        — specific animation within the group
+///   CH4  Strobe Speed          — 0 = off, higher = faster flash
+///   CH5  X-Axis Move           — horizontal position (128 = center)
+///   CH6  Y-Axis Move           — vertical position (128 = center)
+///   CH7  X-Axis Zoom           — horizontal width of pattern
+///   CH8  Y-Axis Zoom           — vertical height of pattern
+///   CH9  Color Selection       — indexed color zones (NOT raw RGB)
+///   CH10 Rotation              — 2D rotation of pattern
+///   CH11 X-Axis Rolling        — 3D barrel-roll effect
+///   CH12 Y-Axis Rolling        — 3D vertical-flip effect
+///   CH13 Drawing Speed         — vector rendering / scan speed
+///   CH14 Pattern Size          — master scale
+///   CH15 Segment Count         — multiply / mirror the pattern
 pub fn build_eytse_packet(env: &FrequencyEnvelopes, time_sec: f64) -> [u8; 16] {
     let mut ch = [0u8; 16];
 
+    // CH1: Mode — 101-150 = DMX Control; lock at 120
     ch[0] = 120;
 
-    let bank = if env.mid > 0.75 {
-        ((env.mid * 255.0) as u8).saturating_add(64)
-    } else {
-        80
-    };
-    ch[1] = bank;
+    // CH2: Pattern Group — slow bank cycling (~20 s per bank)
+    let bank_idx = ((time_sec * 0.05) as u32 % 4) as u8;
+    ch[1] = bank_idx * 64;
 
-    let pattern_base: u8 = if env.mid > 0.6 || env.high > 0.65 {
-        ((env.mid + env.high) * 0.5 * 180.0) as u8
-    } else {
-        40
-    };
-    ch[2] = pattern_base;
-    ch[3] = pattern_base.saturating_add(20);
+    // CH3: Pattern Choice — mid+high energy selects specific animation
+    ch[2] = ((env.mid + env.high) * 0.5 * 200.0) as u8;
 
-    let speed = env.bpm_phase * std::f32::consts::TAU;
-    let x = ((speed.sin() * 0.5 + 0.5) * 255.0) as u8;
-    let y = ((speed.cos() * 0.5 + 0.5) * 255.0) as u8;
-    ch[4] = x;
-    ch[5] = y;
-
-    let rot_speed = time_sec as f32 * 0.4;
-    ch[6] = (((rot_speed.sin() * 0.5 + 0.5) * 200.0) as u8).saturating_add(28);
-    ch[7] = (((rot_speed.cos() * 0.5 + 0.5) * 200.0) as u8).saturating_add(28);
-
-    let zoom = if env.bass > 0.80 {
-        255
-    } else {
-        let decay = (env.bass * 155.0) as u8;
-        100u8.saturating_add(decay)
-    };
-    ch[8] = zoom;
-    ch[9] = zoom.saturating_sub(20);
-
-    ch[10] = if env.high > 0.70 {
-        ((env.high * 255.0) as u8).min(220)
+    // CH4: Strobe Speed — 0 = off; only on peak hi-hat + bass energy
+    ch[3] = if env.high > 0.75 && env.bass > 0.5 {
+        ((env.high * 150.0) as u8).saturating_add(50).min(200)
     } else {
         0
     };
 
-    ch[11] = (env.bass * 255.0) as u8;
-    ch[12] = (env.mid * 255.0) as u8;
-    ch[13] = (env.high * 255.0) as u8;
+    // CH5: X-Axis Move — BPM-locked horizontal sweep (0–255, 128 = center)
+    let speed = env.bpm_phase * std::f32::consts::TAU;
+    ch[4] = ((speed.sin() * 0.5 + 0.5) * 255.0) as u8;
 
+    // CH6: Y-Axis Move — BPM-locked vertical sweep
+    ch[5] = ((speed.cos() * 0.5 + 0.5) * 255.0) as u8;
+
+    // CH7: X-Axis Zoom — bass-reactive width snap
+    let zoom = if env.bass > 0.80 {
+        255
+    } else {
+        100u8.saturating_add((env.bass * 155.0) as u8)
+    };
+    ch[6] = zoom;
+
+    // CH8: Y-Axis Zoom — slightly tighter than X for depth perspective
+    ch[7] = zoom.saturating_sub(10);
+
+    // CH9: Color Selection — indexed zones (NOT raw RGB):
+    //   ~51-100  = Red    (bass/kick dominant)
+    //   ~101-150 = Green  (melody/chord dominant)
+    //   ~151-200 = Blue   (hi-hat/snare dominant)
+    //   ~201-255 = Multi-color cycle (ambient / low energy)
+    ch[8] = if env.bass > 0.65 {
+        70
+    } else if env.mid > 0.60 {
+        120
+    } else if env.high > 0.60 {
+        170
+    } else {
+        220
+    };
+
+    // CH10: Rotation — continuous 2D rotation at ~1/2 BPM
+    let rot = time_sec as f32 * 0.4;
+    ch[9] = (((rot.sin() * 0.5 + 0.5) * 220.0) as u8).saturating_add(18);
+
+    // CH11: X-Axis Rolling (3D barrel roll) — activate on strong bass drops
+    ch[10] = if env.bass > 0.80 {
+        ((env.bass * 180.0) as u8).min(200)
+    } else {
+        0
+    };
+
+    // CH12: Y-Axis Rolling (3D vertical flip) — activate on strong mid peaks
+    ch[11] = if env.mid > 0.75 {
+        ((env.mid * 150.0) as u8).min(180)
+    } else {
+        0
+    };
+
+    // CH13: Drawing Speed — faster on high energy for tighter vector paths
+    let energy = env.bass * 0.5 + env.mid * 0.3 + env.high * 0.2;
+    ch[12] = (100.0 + energy * 155.0) as u8;
+
+    // CH14: Pattern Size — master scale, bass-driven
+    ch[13] = zoom;
+
+    // CH15: Segment Count — multiply/mirror on energy peaks (fan-out effect)
     let density = (env.bass + env.mid + env.high) / 3.0;
     ch[14] = if density > 0.65 { 180 } else { 0 };
-    ch[15] = if density > 0.75 { 200 } else { 0 };
+
+    // CH16 unused — 15-ch fixture
+    ch[15] = 0;
 
     ch
 }
