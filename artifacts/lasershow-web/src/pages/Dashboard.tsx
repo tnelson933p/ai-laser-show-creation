@@ -11,6 +11,7 @@ import {
 import { ShowEngine, LISSAJOUS_PRESETS, type VisualState, type ShowOverrides } from "@/lib/show-engine";
 import {
   Play, Square, Upload, Usb, Activity, Zap, Music, ChevronDown, ChevronUp, Cpu,
+  TrendingDown, Scissors, TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -54,12 +55,16 @@ export default function Dashboard() {
   const visualStateRef = useRef<VisualState | null>(null);
   const [showOverrides, setShowOverrides] = useState<ShowOverrides>({});
   const showOverridesRef = useRef<ShowOverrides>({});
-  // Keep a ref in sync so the dmx loop reads the latest value without stale closure
   useEffect(() => { showOverridesRef.current = showOverrides; }, [showOverrides]);
+
+  // Music transitions
+  const [isFadingOut, setIsFadingOut] = useState(false);
+  const fadeTimerRef = useRef<number | null>(null);
 
   // Audio refs
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const startTimeRef = useRef<number>(0);
   const timerRef = useRef<number | null>(null);
@@ -149,26 +154,84 @@ export default function Dashboard() {
     visualStateRef.current = null;
   }, []);
 
+  // ── Fade / Cut helpers ────────────────────────────────────────────────────
+  const fadeOut = useCallback((seconds = 3) => {
+    const ctx = audioCtxRef.current;
+    const gain = gainNodeRef.current;
+    if (!ctx || !gain || !isPlaying || isFadingOut) return;
+    setIsFadingOut(true);
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + seconds);
+    fadeTimerRef.current = window.setTimeout(() => {
+      stopPlayback();
+      setIsFadingOut(false);
+    }, seconds * 1000);
+  }, [isPlaying, isFadingOut]);
+
+  const fadeIn = useCallback((seconds = 3) => {
+    const ctx = audioCtxRef.current;
+    const gain = gainNodeRef.current;
+    if (!ctx || !gain) return;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(1, ctx.currentTime + seconds);
+  }, []);
+
+  const cutNow = useCallback(() => {
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+    setIsFadingOut(false);
+    stopPlayback();
+  }, []);
+
+  // Watch for AI-directed audioAction overrides and execute them once
+  useEffect(() => {
+    const action = showOverrides.audioAction;
+    if (!action) return;
+    const secs = showOverrides.fadeSeconds ?? 3;
+    // Clear the action immediately so it doesn't fire again
+    setShowOverrides(prev => {
+      const { audioAction: _, fadeSeconds: __, ...rest } = prev;
+      return rest;
+    });
+    if (action === "fadeOut") fadeOut(secs);
+    else if (action === "cut")     cutNow();
+    else if (action === "fadeIn")  fadeIn(secs);
+  }, [showOverrides.audioAction]);
+
   const togglePlayback = () => {
     if (!track || !audioCtxRef.current) return;
     if (isPlaying) { stopPlayback(); return; }
 
-    const source = audioCtxRef.current.createBufferSource();
+    const ctx = audioCtxRef.current;
+    const source = ctx.createBufferSource();
     source.buffer = track.buffer;
-    const analyser = audioCtxRef.current.createAnalyser();
+
+    const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;
     analyserRef.current = analyser;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(1, ctx.currentTime);
+    gainNodeRef.current = gain;
+
+    // chain: source → analyser → gain → speakers
     source.connect(analyser);
-    analyser.connect(audioCtxRef.current.destination);
+    analyser.connect(gain);
+    gain.connect(ctx.destination);
+
     source.start();
     sourceNodeRef.current = source;
-    startTimeRef.current = audioCtxRef.current.currentTime;
+    startTimeRef.current = ctx.currentTime;
     setIsPlaying(true);
+    setIsFadingOut(false);
     engineRef.current?.reset();
     timerRef.current = window.setInterval(dmxLoop, 25);
     source.onended = () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
       setIsPlaying(false);
+      setIsFadingOut(false);
       visualStateRef.current = null;
       setDmxOutput(new Array(16).fill(0));
     };
@@ -428,7 +491,7 @@ export default function Dashboard() {
                     <Meter label="HIGH" value={currentEnvelopes.high} color="#aa44ff" />
                   </div>
 
-                  {/* Controls */}
+                  {/* Primary play/stop + eject */}
                   <div className="flex gap-2">
                     <Button
                       onClick={togglePlayback}
@@ -452,6 +515,46 @@ export default function Dashboard() {
                       title="Eject track"
                     >
                       <Upload className="w-4 h-4" />
+                    </Button>
+                  </div>
+
+                  {/* Transition controls — visible when a track is loaded */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fadeIn(3)}
+                      disabled={!isPlaying || isFadingOut}
+                      className="h-9 border-zinc-800 text-zinc-400 hover:text-[#00ff9d] hover:border-[#00ff9d]/40 rounded-sm text-[11px] font-mono uppercase tracking-wider"
+                      title="Fade volume in over 3 s"
+                    >
+                      <TrendingUp className="w-3 h-3 mr-1.5" /> Fade In
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fadeOut(3)}
+                      disabled={!isPlaying || isFadingOut}
+                      className={cn(
+                        "h-9 border-zinc-800 rounded-sm text-[11px] font-mono uppercase tracking-wider",
+                        isFadingOut
+                          ? "text-yellow-400 border-yellow-600/40 animate-pulse"
+                          : "text-zinc-400 hover:text-yellow-400 hover:border-yellow-600/40"
+                      )}
+                      title="Fade volume out over 3 s then stop"
+                    >
+                      <TrendingDown className="w-3 h-3 mr-1.5" />
+                      {isFadingOut ? "Fading…" : "Fade Out"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={cutNow}
+                      disabled={!isPlaying}
+                      className="h-9 border-zinc-800 text-zinc-400 hover:text-red-400 hover:border-red-600/40 rounded-sm text-[11px] font-mono uppercase tracking-wider"
+                      title="Hard cut — stop immediately"
+                    >
+                      <Scissors className="w-3 h-3 mr-1.5" /> Cut
                     </Button>
                   </div>
                 </div>

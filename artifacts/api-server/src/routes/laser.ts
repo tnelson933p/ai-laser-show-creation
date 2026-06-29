@@ -152,7 +152,16 @@ Examples of valid user requests:
 "Move faster" → increase movementSpeed
 "The colors are too dim" → increase colorIntensity
 "Keep it simple" → set patternComplexity "simple", movementStyle "sweep"
-"Make it hypnotic and slow" → set movementSpeed 0.6, movementStyle "lissajous", patternShiftBeats 32`;
+"Make it hypnotic and slow" → set movementSpeed 0.6, movementStyle "lissajous", patternShiftBeats 32
+"Fade out the music" → set audioAction "fadeOut" (optionally fadeSeconds 3)
+"Cut the music now / hard cut" → set audioAction "cut"
+"Fade in the music" → set audioAction "fadeIn" (optionally fadeSeconds 2)
+"Crossfade to next track" → set audioAction "fadeOut", fadeSeconds 4 (user should load next track after fade)
+
+MUSIC TRANSITION NOTES:
+- audioAction is consumed once and cleared — do not set it unless the user is explicitly asking for a music transition
+- For live show flow, recommend fade-outs between songs rather than hard cuts unless the user specifies
+- fadeSeconds defaults to 3 if not specified`;
 
   const chatMessages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },

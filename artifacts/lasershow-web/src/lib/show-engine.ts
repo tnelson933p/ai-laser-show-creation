@@ -74,6 +74,9 @@ export interface ShowOverrides {
   movementSpeed?: number;    // 0.5–3.0 phase multiplier
   gratingEnabled?: boolean;
   patternComplexity?: "simple" | "medium" | "complex";
+  // Music transition commands (consumed and cleared by Dashboard)
+  audioAction?: "fadeOut" | "fadeIn" | "cut";
+  fadeSeconds?: number;      // duration for fade in/out (default 3)
 }
 
 const SIMPLE_PATTERN_POOL  = [0, 1, 2, 8];
