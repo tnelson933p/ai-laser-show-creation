@@ -10,8 +10,11 @@ import {
 } from "@/lib/laser-database";
 import { ShowEngine, LISSAJOUS_PRESETS, type VisualState, type ShowOverrides } from "@/lib/show-engine";
 import {
+  type ChatMessage, type ShowSave, loadLibrary, saveLibrary,
+} from "@/lib/show-library";
+import {
   Play, Square, Upload, Usb, Activity, Zap, Music, ChevronDown, ChevronUp, Cpu,
-  TrendingDown, Scissors, TrendingUp, Pause, Copy, Clock,
+  TrendingDown, Scissors, TrendingUp, Pause, Copy, Clock, Library, Save, Plus, X as XIcon, ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -36,13 +39,26 @@ export default function Dashboard() {
   const [selectedModel, setSelectedModel] = useState<string>("EY003-L (16-ch)");
   const [laser, setLaser] = useState<LaserModel | null>(null);
 
-  // Audio
-  const [track, setTrack] = useState<TrackData | null>(null);
+  // Audio — setlist replaces single track
+  const [setlist, setSetlist] = useState<TrackData[]>([]);
+  const [currentTrackIdx, setCurrentTrackIdx] = useState(0);
+  const track = setlist[currentTrackIdx] ?? null;
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [currentEnvelopes, setCurrentEnvelopes] = useState({ bass: 0, mid: 0, high: 0 });
+
+  // AI Show Director — lifted here so state survives play/stop cycles
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+
+  // Auto-advance state: when onended fires it sets this; a useEffect then starts the new track
+  const [autoAdvancing, setAutoAdvancing] = useState(false);
+
+  // Show library
+  const [savedShows, setSavedShows] = useState<ShowSave[]>(() => loadLibrary());
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [saveNameInput, setSaveNameInput] = useState("");
 
   // DMX
   const [dmxOutput, setDmxOutput] = useState<number[]>(new Array(16).fill(0));
@@ -76,6 +92,12 @@ export default function Dashboard() {
   const startTimeRef = useRef<number>(0);
   const timerRef = useRef<number | null>(null);
   const writerRef = useRef<WritableStreamDefaultWriter<Uint8Array> | null>(null);
+
+  // Refs for auto-advance (needed because onended callbacks have stale closures)
+  const setlistRef = useRef<TrackData[]>([]);
+  const currentTrackIdxRef = useRef(0);
+  useEffect(() => { setlistRef.current = setlist; }, [setlist]);
+  useEffect(() => { currentTrackIdxRef.current = currentTrackIdx; }, [currentTrackIdx]);
 
   // Init
   useEffect(() => {
@@ -122,6 +144,38 @@ export default function Dashboard() {
     } catch { /* user cancelled or access denied */ }
   };
 
+  // ── Show library save/load ───────────────────────────────────────────────
+  const handleSaveShow = () => {
+    const name = saveNameInput.trim() || `Show ${new Date().toLocaleDateString()}`;
+    if (!laser) return;
+    const show: ShowSave = {
+      id: crypto.randomUUID(),
+      name,
+      createdAt: Date.now(),
+      laserBrand: laser.brand,
+      laserModel: laser.model,
+      messages: chatMessages,
+      overrides: showOverrides,
+      setlistMeta: setlist.map(t => ({ filename: t.filename, bpm: t.analysis.bpm, durationSecs: t.analysis.duration })),
+    };
+    const updated = [...savedShows, show];
+    setSavedShows(updated);
+    saveLibrary(updated);
+    setSaveNameInput("");
+  };
+
+  const handleLoadShow = (show: ShowSave) => {
+    setChatMessages(show.messages);
+    setShowOverrides(show.overrides);
+    setLibraryOpen(false);
+  };
+
+  const handleDeleteShow = (id: string) => {
+    const updated = savedShows.filter(s => s.id !== id);
+    setSavedShows(updated);
+    saveLibrary(updated);
+  };
+
   // ── Audio ───────────────────────────────────────────────────────────────
   const loadFile = async (file: File) => {
     if (!file.name.match(/\.(mp3|wav|ogg|flac)$/i)) {
@@ -134,7 +188,7 @@ export default function Dashboard() {
       if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
       const audioBuffer = await audioCtxRef.current.decodeAudioData(arrayBuffer);
       const analysis = await analyzeTrack(audioBuffer);
-      setTrack({ filename: file.name, buffer: audioBuffer, analysis });
+      setSetlist(prev => [...prev, { filename: file.name, buffer: audioBuffer, analysis }]);
     } catch { alert("Audio processing failed. Try another file."); }
     finally { setIsAnalyzing(false); }
   };
@@ -142,23 +196,35 @@ export default function Dashboard() {
   const onFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) loadFile(file);
+    // Support dropping multiple files at once
+    Array.from(e.dataTransfer.files).forEach(f => loadFile(f));
   };
 
   const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) loadFile(file);
+    Array.from(e.target.files ?? []).forEach(f => loadFile(f));
     e.target.value = "";
   };
 
-  const ejectTrack = useCallback(() => {
-    if (isPlaying) stopPlayback();
-    setTrack(null);
+  const removeTrackFromSetlist = useCallback((idx: number) => {
+    if (isPlaying && idx === currentTrackIdx) stopPlayback();
+    setSetlist(prev => prev.filter((_, i) => i !== idx));
+    setCurrentTrackIdx(prev => Math.max(0, idx < prev ? prev - 1 : prev));
     setCurrentFrame(0);
     setDmxOutput(new Array(16).fill(0));
     setCurrentEnvelopes({ bass: 0, mid: 0, high: 0 });
     visualStateRef.current = null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, currentTrackIdx]);
+
+  const clearSetlist = useCallback(() => {
+    if (isPlaying) stopPlayback();
+    setSetlist([]);
+    setCurrentTrackIdx(0);
+    setCurrentFrame(0);
+    setDmxOutput(new Array(16).fill(0));
+    setCurrentEnvelopes({ bass: 0, mid: 0, high: 0 });
+    visualStateRef.current = null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying]);
 
   // ── Playback ─────────────────────────────────────────────────────────────
@@ -173,7 +239,7 @@ export default function Dashboard() {
     pausedAtRef.current = 0;
     setCurrentFrame(0);
     setCurrentEnvelopes({ bass: 0, mid: 0, high: 0 });
-    setDmxOutput(new Array(selectedLaserChannels => selectedLaserChannels).fill(0));
+    setDmxOutput(new Array(16).fill(0));
     engineRef.current?.reset();
     visualStateRef.current = null;
   }, []);
@@ -254,10 +320,18 @@ export default function Dashboard() {
     source.onended = () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
-      setIsPlaying(false);
       setIsFadingOut(false);
       visualStateRef.current = null;
       setDmxOutput(new Array(16).fill(0));
+      const nextIdx = currentTrackIdxRef.current + 1;
+      if (nextIdx < setlistRef.current.length) {
+        setCurrentTrackIdx(nextIdx);
+        setAutoAdvancing(true);
+      } else {
+        setIsPlaying(false);
+        setIsPaused(false);
+        setCurrentFrame(0);
+      }
     };
   };
 
@@ -345,10 +419,18 @@ export default function Dashboard() {
     source.onended = () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
-      setIsPlaying(false);
-      setIsPaused(false);
+      setIsFadingOut(false);
       visualStateRef.current = null;
       setDmxOutput(new Array(16).fill(0));
+      const nextIdx = currentTrackIdxRef.current + 1;
+      if (nextIdx < setlistRef.current.length) {
+        setCurrentTrackIdx(nextIdx);
+        setAutoAdvancing(true);
+      } else {
+        setIsPlaying(false);
+        setIsPaused(false);
+        setCurrentFrame(0);
+      }
     };
   }, [track, dmxLoop]);
 
@@ -387,6 +469,15 @@ export default function Dashboard() {
     }
   }, [track, isPlaying, _startSourceAt]);
 
+  // Auto-advance effect: when onended increments track idx, trigger playback of new track
+  useEffect(() => {
+    if (autoAdvancing && track && audioCtxRef.current) {
+      setAutoAdvancing(false);
+      engineRef.current?.reset();
+      _startSourceAt(0);
+    }
+  }, [autoAdvancing, track, _startSourceAt]);
+
   const selectedLaserChannels = laser?.channelCount ?? 16;
 
   return (
@@ -412,8 +503,82 @@ export default function Dashboard() {
           )}>
             {isPlaying ? "● SHOW LIVE" : "○ STANDBY"}
           </Badge>
+          {/* Show library + save */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-zinc-500 hover:text-white gap-1.5 text-xs"
+            onClick={() => setLibraryOpen(v => !v)}
+          >
+            <Library className="w-4 h-4" />
+            Library
+            {savedShows.length > 0 && (
+              <span className="ml-0.5 text-[10px] bg-zinc-800 rounded-full px-1.5">{savedShows.length}</span>
+            )}
+          </Button>
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              value={saveNameInput}
+              onChange={e => setSaveNameInput(e.target.value)}
+              placeholder="Show name…"
+              className="h-8 w-32 bg-black/60 border border-zinc-800 rounded-sm px-2 text-xs text-zinc-300 placeholder:text-zinc-700 focus:outline-none focus:border-zinc-600"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 text-zinc-500 hover:text-[#00ff9d] gap-1 text-xs"
+              onClick={handleSaveShow}
+              disabled={!laser}
+              title="Save current show"
+            >
+              <Save className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
       </header>
+
+      {/* ── Show Library Drawer ────────────────────────────────────────── */}
+      {libraryOpen && (
+        <div className="border-b border-zinc-800 bg-[#08080f] px-6 py-4">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs uppercase tracking-widest text-zinc-500 font-mono">Saved Shows</span>
+            <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-zinc-600" onClick={() => setLibraryOpen(false)}>
+              <XIcon className="w-4 h-4" />
+            </Button>
+          </div>
+          {savedShows.length === 0 ? (
+            <p className="text-xs text-zinc-700">No saved shows yet. Type a name above and click save.</p>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+              {savedShows.map(show => (
+                <div key={show.id} className="border border-zinc-800 bg-black rounded-sm p-3 flex flex-col gap-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs text-white font-bold truncate">{show.name}</p>
+                      <p className="text-[10px] text-zinc-600">{show.laserBrand} {show.laserModel}</p>
+                      <p className="text-[10px] text-zinc-700">{new Date(show.createdAt).toLocaleDateString()}</p>
+                      {show.setlistMeta.length > 0 && (
+                        <p className="text-[10px] text-zinc-600 mt-0.5">{show.setlistMeta.length} track{show.setlistMeta.length > 1 ? "s" : ""}</p>
+                      )}
+                    </div>
+                    <Button variant="ghost" size="sm" className="h-5 w-5 p-0 text-zinc-700 hover:text-red-500 shrink-0" onClick={() => handleDeleteShow(show.id)}>
+                      <XIcon className="w-3 h-3" />
+                    </Button>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="h-7 text-[10px] font-mono uppercase tracking-wider bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-sm w-full gap-1"
+                    onClick={() => handleLoadShow(show)}
+                  >
+                    <ChevronRight className="w-3 h-3" /> Load
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <main className="flex-1 flex flex-col p-4 gap-4 max-w-[1400px] mx-auto w-full">
 
@@ -513,6 +678,8 @@ export default function Dashboard() {
                     track={track}
                     currentEnvelopes={currentEnvelopes}
                     isPlaying={isPlaying}
+                    messages={chatMessages}
+                    onMessagesChange={setChatMessages}
                   />
 
                   {/* DMX connect */}
@@ -574,7 +741,7 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="px-5 pb-5 space-y-4">
-              {!track ? (
+              {setlist.length === 0 ? (
                 <label
                   className={cn(
                     "border-2 border-dashed rounded-sm flex flex-col items-center justify-center gap-3 cursor-pointer transition-all p-10",
@@ -592,6 +759,7 @@ export default function Dashboard() {
                     type="file"
                     className="hidden"
                     accept=".mp3,.wav,.ogg,.flac"
+                    multiple
                     onChange={onFileInput}
                   />
                   <Upload className={cn("w-8 h-8", isDragOver ? "text-primary" : "text-zinc-600")} />
@@ -599,24 +767,57 @@ export default function Dashboard() {
                     <p className="text-sm font-bold text-zinc-300">
                       {isAnalyzing ? "ANALYZING TRACK…" : "DROP MUSIC HERE"}
                     </p>
-                    <p className="text-xs text-zinc-600 mt-1">MP3, WAV, OGG, FLAC</p>
+                    <p className="text-xs text-zinc-600 mt-1">MP3, WAV, OGG, FLAC — drop multiple for a setlist</p>
                     <p className="text-xs text-zinc-700 mt-0.5">or click to browse</p>
                   </div>
                 </label>
               ) : (
                 <div className="space-y-4">
-                  {/* Track info */}
+                  {/* Setlist */}
+                  {setlist.length > 1 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-widest text-zinc-600 mb-1.5">Setlist</div>
+                      {setlist.map((t, i) => (
+                        <div
+                          key={i}
+                          className={cn(
+                            "flex items-center gap-2 px-2 py-1.5 rounded-sm cursor-pointer transition-colors text-xs",
+                            i === currentTrackIdx
+                              ? "bg-primary/10 border border-primary/30 text-primary"
+                              : "bg-zinc-900/50 border border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700"
+                          )}
+                          onClick={() => {
+                            if (!isPlaying) setCurrentTrackIdx(i);
+                          }}
+                        >
+                          <span className="w-4 text-center font-mono shrink-0">
+                            {i === currentTrackIdx && isPlaying ? "▶" : `${i + 1}`}
+                          </span>
+                          <span className="truncate flex-1">{t.filename}</span>
+                          <span className="text-[10px] text-zinc-600 shrink-0">{formatDuration(t.analysis.duration)}</span>
+                          <button
+                            onClick={e => { e.stopPropagation(); removeTrackFromSetlist(i); }}
+                            className="text-zinc-700 hover:text-red-500 shrink-0 ml-1"
+                          >
+                            <XIcon className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Current track info */}
                   <div className="bg-black border border-zinc-800 rounded-sm p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-bold text-white truncate">{track.filename}</span>
+                      <span className="text-sm font-bold text-white truncate">{track?.filename}</span>
                       <Badge className="bg-primary/20 text-primary border-none rounded-sm text-xs shrink-0">
-                        {track.analysis.bpm} BPM
+                        {track?.analysis.bpm} BPM
                       </Badge>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-xs">
                       <div className="space-y-0.5">
                         <div className="text-zinc-600 uppercase tracking-wider text-[10px]">Duration</div>
-                        <div className="text-zinc-300">{formatDuration(track.analysis.duration)}</div>
+                        <div className="text-zinc-300">{track ? formatDuration(track.analysis.duration) : "--"}</div>
                       </div>
                       <div className="space-y-0.5">
                         <div className="text-zinc-600 uppercase tracking-wider text-[10px]">Progress</div>
@@ -633,10 +834,25 @@ export default function Dashboard() {
                     <div className="h-1 bg-zinc-900 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-primary transition-none"
-                        style={{ width: `${(currentFrame / 40 / track.analysis.duration) * 100}%` }}
+                        style={{ width: track ? `${(currentFrame / 40 / track.analysis.duration) * 100}%` : "0%" }}
                       />
                     </div>
                   </div>
+
+                  {/* Add more tracks */}
+                  <label
+                    className={cn(
+                      "flex items-center gap-2 px-3 py-2 border border-dashed border-zinc-800 rounded-sm cursor-pointer text-xs text-zinc-600 hover:text-zinc-400 hover:border-zinc-600 transition-colors",
+                      isAnalyzing && "opacity-60 pointer-events-none"
+                    )}
+                    onDragOver={e => { e.preventDefault(); setIsDragOver(true); }}
+                    onDragLeave={() => setIsDragOver(false)}
+                    onDrop={onFileDrop}
+                  >
+                    <input type="file" className="hidden" accept=".mp3,.wav,.ogg,.flac" multiple onChange={onFileInput} />
+                    <Plus className="w-3 h-3" />
+                    {isAnalyzing ? "Analyzing…" : "Add more tracks to setlist"}
+                  </label>
 
                   {/* Envelope meters */}
                   <div className="grid grid-cols-3 gap-2">
@@ -664,11 +880,11 @@ export default function Dashboard() {
                     </Button>
                     <Button
                       variant="outline"
-                      onClick={ejectTrack}
+                      onClick={clearSetlist}
                       className="h-12 px-4 border-zinc-800 text-zinc-500 hover:text-white rounded-sm"
-                      title="Eject track"
+                      title="Clear setlist"
                     >
-                      <Upload className="w-4 h-4" />
+                      <XIcon className="w-4 h-4" />
                     </Button>
                   </div>
 
@@ -895,15 +1111,8 @@ export default function Dashboard() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AI Analysis Panel
+// AI Show Director — ShowChat component
 // ─────────────────────────────────────────────────────────────────────────────
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  displayContent: string;
-  settingsApplied?: Partial<ShowOverrides>;
-}
-
 function parseSettingsBlock(text: string): { display: string; settings: ShowOverrides | null } {
   const match = text.match(/<settings>([\s\S]*?)<\/settings>/);
   if (!match) return { display: text, settings: null };
@@ -922,6 +1131,8 @@ function ShowChat({
   track,
   currentEnvelopes,
   isPlaying,
+  messages,
+  onMessagesChange,
 }: {
   laser: LaserModel;
   overrides: ShowOverrides;
@@ -929,13 +1140,13 @@ function ShowChat({
   track: TrackData | null;
   currentEnvelopes: { bass: number; mid: number; high: number };
   isPlaying: boolean;
+  messages: ChatMessage[];
+  onMessagesChange: (msgs: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
 }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const setMessages = onMessagesChange;
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => { setMessages([]); }, [laser.id]);
 
   const scrollToBottom = () => {
     setTimeout(() => {
