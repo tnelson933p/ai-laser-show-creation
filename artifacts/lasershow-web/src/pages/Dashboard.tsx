@@ -971,7 +971,23 @@ export default function Dashboard() {
 
         {/* ── Laser Show Preview Canvas ───────────────────────────────── */}
         <Card className="border-zinc-800/60 bg-black shadow-2xl" style={{ minHeight: 340, flex: 1 }}>
-          <CardContent className="p-0 h-full">
+          {/* Canvas header — explains the live state machine */}
+          <div className="border-b border-zinc-900 px-5 py-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Activity className="w-3.5 h-3.5 text-[#00ff9d]" />
+              <span className="text-[11px] uppercase tracking-widest text-zinc-400 font-bold">
+                {isPlaying ? "Show Output" : "Show Design Canvas"}
+              </span>
+            </div>
+            <span className="text-[10px] text-zinc-600 font-mono">
+              {isPlaying
+                ? "● Music-reactive DMX · same output goes to laser hardware"
+                : laser
+                  ? "Chat with AI Director to design · drop music + Play Show to go live"
+                  : "Select a laser to begin designing"}
+            </span>
+          </div>
+          <CardContent className="p-0" style={{ height: "calc(100% - 41px)" }}>
             <LaserCanvas
               visualStateRef={visualStateRef}
               isPlaying={isPlaying}
@@ -1523,14 +1539,15 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvas
         ctx.globalAlpha = 1;
       }
 
-      // Preview mode label — shown when not in live playback
-      if (!isPlaying) {
+      // State label — bottom-right corner
+      {
         const fontSize = 10 * window.devicePixelRatio;
         ctx.font = `${fontSize}px monospace`;
-        ctx.textAlign = "left";
-        ctx.globalAlpha = 0.45;
-        ctx.fillStyle = "#00ff9d";
-        ctx.fillText("◌ PREVIEW — AI settings active", 12 * window.devicePixelRatio, 20 * window.devicePixelRatio);
+        ctx.textAlign = "right";
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = isPlaying ? "#00ff9d" : "#888888";
+        const label = isPlaying ? "● LIVE — music-reactive" : "◌ DESIGN — AI settings applied";
+        ctx.fillText(label, W - 12 * window.devicePixelRatio, H - 14 * window.devicePixelRatio);
         ctx.globalAlpha = 1;
       }
 
