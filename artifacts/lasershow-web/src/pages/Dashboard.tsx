@@ -1261,20 +1261,7 @@ export default function Dashboard() {
         </div>
 
       {/* ── Download footer ──────────────────────────────────────────────── */}
-      <footer className="border-t border-zinc-800/40 mt-2 px-6 py-4 flex items-center justify-between">
-        <span className="text-[11px] text-zinc-700">AI LaserShow Desktop — real DMX512 output via USB serial</span>
-        <a
-          href="https://github.com/tnelson933p/ai-laser-show-creation/releases/latest"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-sm text-[12px] text-zinc-300 hover:text-[#00ff9d] hover:border-[#00ff9d]/40 transition-colors"
-        >
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
-          </svg>
-          Download Desktop App
-        </a>
-      </footer>
+      <DownloadFooter />
 
       </main>
     </div>
@@ -1284,6 +1271,109 @@ export default function Dashboard() {
 // ─────────────────────────────────────────────────────────────────────────────
 // AI Show Director — ShowChat component
 // ─────────────────────────────────────────────────────────────────────────────
+const RELEASE_BASE = "https://github.com/tnelson933p/ai-laser-show-creation/releases/download/v2.0.2";
+
+const DOWNLOAD_OPTIONS = [
+  {
+    label: "macOS — Apple Silicon",
+    hint: ".dmg",
+    url: `${RELEASE_BASE}/AI.LaserShow.Client_0.1.0_aarch64.dmg`,
+    icon: (
+      <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+      </svg>
+    ),
+  },
+  {
+    label: "macOS — Intel",
+    hint: ".dmg",
+    url: `${RELEASE_BASE}/AI.LaserShow.Client_0.1.0_x64.dmg`,
+    icon: (
+      <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+      </svg>
+    ),
+  },
+  {
+    label: "Windows",
+    hint: ".exe installer",
+    url: `${RELEASE_BASE}/AI.LaserShow.Client_0.1.0_x64-setup.exe`,
+    icon: (
+      <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/>
+      </svg>
+    ),
+  },
+  {
+    label: "Windows",
+    hint: ".msi package",
+    url: `${RELEASE_BASE}/AI.LaserShow.Client_0.1.0_x64_en-US.msi`,
+    icon: (
+      <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/>
+      </svg>
+    ),
+  },
+];
+
+function DownloadFooter() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  return (
+    <footer className="border-t border-zinc-800/40 mt-2 px-6 py-4 flex items-center justify-between">
+      <span className="text-[11px] text-zinc-700">AI LaserShow Desktop — real DMX512 output via USB serial</span>
+
+      <div ref={ref} className="relative">
+        <button
+          onClick={() => setOpen(v => !v)}
+          className="flex items-center gap-2 px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-sm text-[12px] text-zinc-300 hover:text-[#00ff9d] hover:border-[#00ff9d]/40 transition-colors select-none"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 16l-6-6h12l-6 6z"/>
+          </svg>
+          Download Desktop App
+          <svg
+            className={`w-3 h-3 transition-transform ${open ? "rotate-180" : ""}`}
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+          >
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </button>
+
+        {open && (
+          <div className="absolute bottom-full right-0 mb-2 w-64 bg-zinc-900 border border-zinc-700 rounded-sm shadow-xl overflow-hidden z-50">
+            <div className="px-3 py-2 border-b border-zinc-800">
+              <span className="text-[10px] text-zinc-500 uppercase tracking-widest">Choose your platform</span>
+            </div>
+            {DOWNLOAD_OPTIONS.map((opt) => (
+              <a
+                key={opt.url}
+                href={opt.url}
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-3 px-4 py-3 text-[12px] text-zinc-300 hover:bg-zinc-800 hover:text-[#00ff9d] transition-colors"
+              >
+                {opt.icon}
+                <span className="flex-1">{opt.label}</span>
+                <span className="text-[10px] text-zinc-600">{opt.hint}</span>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    </footer>
+  );
+}
+
 function parseSettingsBlock(text: string): { display: string; settings: ShowOverrides | null } {
   const match = text.match(/<settings>([\s\S]*?)<\/settings>/);
   if (!match) {
