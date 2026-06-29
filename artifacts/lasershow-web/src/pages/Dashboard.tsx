@@ -73,7 +73,12 @@ export default function Dashboard() {
   const visualStateRef = useRef<VisualState | null>(null);
   const [showOverrides, setShowOverrides] = useState<ShowOverrides>({});
   const showOverridesRef = useRef<ShowOverrides>({});
-  useEffect(() => { showOverridesRef.current = showOverrides; }, [showOverrides]);
+  // Synchronous updater — updates the ref immediately so the 40Hz loops never
+  // read a stale override (don't rely on React's async render cycle for this).
+  const applyOverrides = (next: ShowOverrides) => {
+    showOverridesRef.current = next;
+    setShowOverrides(next);
+  };
 
   // Music transitions
   const [isFadingOut, setIsFadingOut] = useState(false);
@@ -119,10 +124,13 @@ export default function Dashboard() {
       previewTimeRef.current += 1 / 40;
       const t = previewTimeRef.current;
       const bpm = 120;
-      // Punchy synthetic "music" — gives the engine enough energy to show patterns clearly
-      const bass = 0.55 + Math.sin(t * Math.PI * 2 * (bpm / 60)) * 0.40;
-      const mid  = 0.40 + Math.sin(t * 1.7 + 1.2) * 0.25;
-      const high = 0.20 + Math.sin(t * 3.1 + 2.5) * 0.15;
+      // Full-range synthetic audio — all bands reach their peaks so every
+      // AI setting (strobe, grating, zoom snaps, color) fires visibly in preview.
+      // Bass: punchy 2-beat cycle  Mid: flowing  High: quick peaks for strobe
+      const beat = t * Math.PI * 2 * (bpm / 60);
+      const bass = Math.max(0, Math.min(1, 0.55 + Math.sin(beat) * 0.44));
+      const mid  = Math.max(0, Math.min(1, 0.48 + Math.sin(t * 1.7 + 1.2) * 0.40));
+      const high = Math.max(0, Math.min(1, 0.55 + Math.sin(t * 4.3 + 2.1) * 0.44));
       const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: t }, showOverridesRef.current);
       visualStateRef.current = result.visualState;
     }, 25);
@@ -148,7 +156,8 @@ export default function Dashboard() {
     if (found) {
       engineRef.current = new ShowEngine(found);
     }
-    setShowOverrides({});
+    applyOverrides({});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBrand, selectedModel]);
 
   // Brand change → pick first model
@@ -202,7 +211,7 @@ export default function Dashboard() {
 
   const handleLoadShow = (show: ShowSave) => {
     setChatMessages(show.messages);
-    setShowOverrides(show.overrides);
+    applyOverrides(show.overrides);
     setLibraryOpen(false);
   };
 
@@ -316,10 +325,8 @@ export default function Dashboard() {
     if (!action) return;
     const secs = showOverrides.fadeSeconds ?? 3;
     // Clear the action immediately so it doesn't fire again
-    setShowOverrides(prev => {
-      const { audioAction: _, fadeSeconds: __, ...rest } = prev;
-      return rest;
-    });
+    const { audioAction: _a, fadeSeconds: _f, ...rest } = showOverrides;
+    applyOverrides(rest);
     if (action === "fadeOut") fadeOut(secs);
     else if (action === "cut")     cutNow();
     else if (action === "fadeIn")  fadeIn(secs);
@@ -351,7 +358,9 @@ export default function Dashboard() {
     startTimeRef.current = ctx.currentTime;
     setIsPlaying(true);
     setIsFadingOut(false);
-    engineRef.current?.reset();
+    // Do NOT reset the engine here — the preview loop has been running it with
+    // the AI's current overrides. Resetting would wipe that state and always
+    // start from pattern 0 (circle) regardless of what the AI configured.
     timerRef.current = window.setInterval(dmxLoop, 25);
     source.onended = () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -710,7 +719,7 @@ export default function Dashboard() {
                   <ShowChat
                     laser={laser}
                     overrides={showOverrides}
-                    onOverridesChange={setShowOverrides}
+                    onOverridesChange={applyOverrides}
                     track={track}
                     currentEnvelopes={currentEnvelopes}
                     isPlaying={isPlaying}
@@ -1496,52 +1505,75 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvas
       // ── Live show rendering ───────────────────────────────────────
       const cx = W / 2;
       const cy = H / 2;
-      const baseR = Math.min(W, H) * 0.38 * vs.zoom;
-      const color = `rgb(${Math.round(vs.red * 255)},${Math.round(vs.green * 255)},${Math.round(vs.blue * 255)})`;
+      const animOffset = performance.now() / 1000;
 
-      // Strobe: full clear on strobe frames
-      if (vs.strobe && Math.random() > 0.4) {
-        ctx.globalAlpha = 0.95;
-        ctx.fillStyle = "#000000";
+      // Strobe: full white flash on strobe frames — very visible
+      if (vs.strobe && Math.random() > 0.35) {
+        ctx.globalAlpha = 0.97;
+        ctx.fillStyle = `rgb(${Math.round(vs.red * 255)},${Math.round(vs.green * 255)},${Math.round(vs.blue * 255)})`;
         ctx.fillRect(0, 0, W, H);
         ctx.globalAlpha = 1;
         return;
       }
 
-      // Fog glow at laser position
-      const fogX = cx + (vs.xNorm - 0.5) * W * 0.4;
-      const fogY = cy + (vs.yNorm - 0.5) * H * 0.4;
-      const fogGrad = ctx.createRadialGradient(fogX, fogY, 0, fogX, fogY, Math.min(W, H) * 0.4);
-      fogGrad.addColorStop(0, `rgba(${Math.round(vs.red * 30)},${Math.round(vs.green * 60)},${Math.round(vs.blue * 40)},0.06)`);
+      // Pattern position — large offset so movement style is unmistakably visible
+      // xNorm/yNorm range 0–1, centered at 0.5, 35% canvas offset at extremes
+      const patternX = cx + (vs.xNorm - 0.5) * W * 0.35;
+      const patternY = cy + (vs.yNorm - 0.5) * H * 0.35;
+
+      // Base radius, boosted by zoom
+      const baseR = Math.min(W, H) * (0.28 + vs.zoom * 0.16);
+
+      const r255 = Math.round(vs.red   * 255);
+      const g255 = Math.round(vs.green * 255);
+      const b255 = Math.round(vs.blue  * 255);
+      const color = `rgb(${r255},${g255},${b255})`;
+
+      // ── Fog / atmosphere glow ─────────────────────────────────────
+      // Scales with energy — dramatic at high energy levels
+      const fogGlowR = Math.min(W, H) * (0.3 + vs.energy * 0.5);
+      const fogGrad = ctx.createRadialGradient(patternX, patternY, 0, patternX, patternY, fogGlowR);
+      fogGrad.addColorStop(0, `rgba(${r255},${g255},${b255},${(0.04 + vs.energy * 0.08).toFixed(3)})`);
+      fogGrad.addColorStop(0.5, `rgba(${r255},${g255},${b255},${(0.01 + vs.energy * 0.03).toFixed(3)})`);
       fogGrad.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = fogGrad;
       ctx.fillRect(0, 0, W, H);
 
-      // Primary Lissajous pattern
+      // ── Primary Lissajous — rotated by vs.rotation ───────────────
       const [a, b, delta] = LISSAJOUS_PRESETS[vs.patternIndex % LISSAJOUS_PRESETS.length];
-      const patternX = cx + (vs.xNorm - 0.5) * W * 0.15;
-      const patternY = cy + (vs.yNorm - 0.5) * H * 0.15;
-      const animOffset = performance.now() / 1000;
-      drawLissajous(ctx, patternX, patternY, baseR, a, b, delta, animOffset, color, vs.energy, true);
+      ctx.save();
+      ctx.translate(patternX, patternY);
+      ctx.rotate(vs.rotation * 0.3); // slow rotation driven by engine
+      drawLissajous(ctx, 0, 0, baseR, a, b, delta, animOffset, color, vs.energy, true);
 
-      // Grating: additional beam fans
+      // Mirror beam (second Lissajous slightly offset in phase) for richness
+      if (vs.energy > 0.3) {
+        drawLissajous(ctx, 0, 0, baseR * 0.7, a, b, delta + Math.PI * 0.25, animOffset + 0.4, color, vs.energy * 0.5, false);
+      }
+      ctx.restore();
+
+      // ── Grating: fan beams spread around canvas ───────────────────
       if (vs.gratingActive) {
-        const fanCount = laser?.scanTier === "pro" ? 5 : laser?.scanTier === "fast" ? 3 : 2;
+        const fanCount = laser?.scanTier === "pro" ? 6 : laser?.scanTier === "fast" ? 4 : 3;
         for (let i = 0; i < fanCount; i++) {
-          const angle = vs.rotation + (i / fanCount) * Math.PI;
-          const fanX = cx + Math.cos(angle) * W * 0.2;
-          const fanY = cy + Math.sin(angle) * H * 0.2;
-          const fanR = baseR * 0.55;
-          const dim = 0.4 + (i % 2) * 0.2;
-          drawLissajous(ctx, fanX, fanY, fanR, a, b, delta + i * 0.8, animOffset, color, vs.energy * dim, false);
+          const angle = vs.rotation + (i / fanCount) * Math.PI * 2;
+          const spread = Math.min(W, H) * 0.3;
+          const fanX = cx + Math.cos(angle) * spread;
+          const fanY = cy + Math.sin(angle) * spread;
+          const fanR = baseR * 0.45;
+          const dim = 0.5 + (i % 2) * 0.25;
+          drawLissajous(ctx, fanX, fanY, fanR, a, b, delta + i * 1.1, animOffset, color, vs.energy * dim, false);
         }
       }
 
-      // Energy flash at peaks
-      if (vs.energy > 0.85) {
-        const flash = (vs.energy - 0.85) / 0.15;
-        ctx.globalAlpha = flash * 0.07;
-        ctx.fillStyle = color;
+      // ── Energy flash: color wash at peaks ────────────────────────
+      if (vs.energy > 0.75) {
+        const flash = (vs.energy - 0.75) / 0.25;
+        ctx.globalAlpha = flash * 0.12;
+        const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(W, H) * 0.8);
+        grad.addColorStop(0, color);
+        grad.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = grad;
         ctx.fillRect(0, 0, W, H);
         ctx.globalAlpha = 1;
       }
