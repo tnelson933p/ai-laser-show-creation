@@ -34,6 +34,12 @@ export interface VisualState {
   patternIndex: number; // which Lissajous ratio preset
   gratingActive: boolean;
   energy: number;      // 0–1 overall energy
+  // Per-frame audio reactivity — passed directly into animationCode
+  bass: number;        // 0–1 live bass energy (kick/sub — reactive to low-end hits)
+  mid: number;         // 0–1 live mid energy (melody, chords, vocals)
+  high: number;        // 0–1 live high energy (hi-hats, snare, cymbals)
+  beat: number;        // 0–1 position within current BPM beat (resets to 0 on each beat)
+  bar: number;         // current bar number (integer, 0-indexed)
   // Text & animation overlays
   textEnabled: boolean;
   textContent: string;
@@ -172,6 +178,8 @@ export class ShowEngine {
     this.phaseAccumulator += beatsPerTick * Math.PI * 2 * speedMul;
     const absoluteBeat = Math.floor(timeS / beatDuration);
     const beatPhase = (timeS % beatDuration) / beatDuration; // 0–1 within beat
+    const beat = beatPhase; // alias for clarity — passed to animationCode
+    const currentBar = Math.floor(timeS / (beatDuration * 4)); // current 4/4 bar
     const phraseLength = 8;
     const phraseIndex = Math.floor(absoluteBeat / phraseLength);
 
@@ -217,6 +225,8 @@ export class ShowEngine {
       yNorm = (absoluteBeat % 4) / 3;
     }
 
+    this.currentBeat = absoluteBeat;
+
     // ── Rotation ──────────────────────────────────────────────────────────
     const rotation = this.phaseAccumulator * 0.5 + mid * Math.PI;
 
@@ -232,12 +242,10 @@ export class ShowEngine {
     let red = 0, green = 0, blue = 0;
 
     if (strategy.colorMode === "rgb-full") {
-      // Deep RGB matrix — each band drives a primary color
-      red   = Math.pow(bass, 0.6);    // bass → red (non-linear for punch)
-      green = Math.pow(mid, 0.7);     // mid  → green
-      blue  = Math.pow(high, 0.65);   // high → blue
+      red   = Math.pow(bass, 0.6);
+      green = Math.pow(mid, 0.7);
+      blue  = Math.pow(high, 0.65);
 
-      // White flash on simultaneous peaks
       if (bass > 0.75 && mid > 0.6 && high > 0.5) {
         const whiteBoost = Math.min(1, (bass + mid + high - 1.85) * 2);
         red   = Math.min(1, red   + whiteBoost * 0.4);
@@ -245,25 +253,21 @@ export class ShowEngine {
         blue  = Math.min(1, blue  + whiteBoost * 0.4);
       }
 
-      // Color temperature shift: warm on high energy (more red/green), cool at rest
       if (avgEnergy > 0.55) {
         red   = Math.min(1, red   * 1.15);
         green = Math.min(1, green * 1.05);
       }
 
     } else if (strategy.colorMode === "rgy") {
-      // RGY matrix: red=bass, green=mid baseline, yellow=mid peak
       red   = Math.pow(bass, 0.7);
-      green = Math.pow(mid, 0.8) * (1 - bass * 0.5); // green fades when bass dominates
-      blue  = 0; // no blue diode
-      // Yellow = red+green together on mid peaks
+      green = Math.pow(mid, 0.8) * (1 - bass * 0.5);
+      blue  = 0;
       if (mid > 0.65) {
         red   = Math.min(1, red   + mid * 0.4);
         green = Math.min(1, green + mid * 0.3);
       }
 
     } else if (strategy.colorMode === "rg") {
-      // Red/Green only — alternating with energy
       if (bass > mid) {
         red = Math.pow(bass, 0.6);
         green = Math.pow(mid, 0.9) * 0.4;
@@ -274,11 +278,9 @@ export class ShowEngine {
       blue = 0;
 
     } else {
-      // Indexed — not directly controllable per-color
       red = energy; green = energy * 0.5; blue = energy * 0.8;
     }
 
-    // ── Color intensity multiplier (AI override) ──────────────────────────
     red   = Math.min(1, red   * colorIntensity);
     green = Math.min(1, green * colorIntensity);
     blue  = Math.min(1, blue  * colorIntensity);
@@ -295,7 +297,7 @@ export class ShowEngine {
 
     const fn = (fnKey: string): number => {
       const def = map.find(c => c.fn === fnKey);
-      return def ? def.ch - 1 : -1; // 0-indexed
+      return def ? def.ch - 1 : -1;
     };
 
     const set = (fnKey: string, value: number) => {
@@ -303,44 +305,33 @@ export class ShowEngine {
       if (idx >= 0) channels[idx] = Math.round(Math.min(255, Math.max(0, value)));
     };
 
-    // Mode — always locked to DMX control
     set("mode", 120);
-
-    // Animation bank
     set("animBank", this.bankIndex * 63);
 
-    // Pattern — maps to pattern bank value
     const patternVal = (patternIndex / (LISSAJOUS_PRESETS.length - 1)) * 200 + 20;
     set("patternLo", patternVal);
     set("pattern",  patternVal);
     set("patternHi", 0);
 
-    // X/Y
     set("xPos", xNorm * 255);
     set("yPos", yNorm * 255);
 
-    // Rotation
     const rotVal = ((rotation % (Math.PI * 2)) / (Math.PI * 2)) * 255;
     set("rotation",  rotVal);
     set("rotSpeed",  0);
 
-    // Zoom
     set("zoom", zoomNorm * 255);
     set("size", zoomNorm * 220);
 
-    // Strobe
     set("strobe", strobe ? Math.round(50 + high * 170) : 0);
 
-    // Colors
     set("red",   red   * 255);
     set("green", green * 255);
     set("blue",  blue  * 255);
 
-    // Grating
     set("grating",    gratingActive ? Math.round(120 + energy * 135) : 0);
     set("gratingRot", gratingActive ? Math.round(rotVal * 0.5) : 0);
 
-    // Indexed color (for 7-ch color channel)
     if (strategy.colorMode === "indexed") {
       const colorIdx = Math.round((timeS * 0.1 * 255) % 255);
       set("color", colorIdx);
@@ -350,6 +341,8 @@ export class ShowEngine {
     const visualState: VisualState = {
       xNorm, yNorm, rotation, zoom: zoomNorm,
       red, green, blue, strobe, patternIndex, gratingActive, energy,
+      // Per-frame audio values passed through to animationCode
+      bass, mid, high, beat, bar: currentBar,
       textEnabled:    overrides.textEnabled    ?? false,
       textContent:    overrides.textContent    ?? "",
       animationStyle: overrides.animationStyle ?? "none",
@@ -362,12 +355,12 @@ export class ShowEngine {
   reset() {
     this.currentPatternIdx = 0;
     this.lastPatternShiftBeat = -1;
-    // Randomize starting phase so every show starts from a different point in
-    // the Lissajous cycle — prevents the "same sequence every play" effect
     this.phaseAccumulator = Math.random() * Math.PI * 2;
     this.zoomDecay = 0;
     this.bankIndex = Math.floor(Math.random() * 4);
     this.lastBankShiftPhrase = -1;
     this.energyHistory = [];
+    this.currentBeat = 0;
+    this.phraseCount = 0;
   }
 }

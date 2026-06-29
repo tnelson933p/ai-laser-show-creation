@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { analyzeTrack } from "@/lib/audio-engine";
+import { analyzeTrack, type EnergySegment } from "@/lib/audio-engine";
 import {
   LASER_BRANDS, LASER_DATABASE, getLaserByBrandModel,
   type LaserModel,
@@ -27,6 +27,7 @@ interface TrackData {
     high: Float32Array;
     bpm: number;
     duration: number;
+    segments: EnergySegment[];  // per-4-bar energy timeline
   };
 }
 
@@ -1441,7 +1442,8 @@ function ShowChat({
     let accumulated = "";
 
     try {
-      // Build music context from analysis data so AI can make music-aware decisions
+      // Build music context — includes full energy timeline so AI knows exactly when
+      // drops, builds, and quiet sections happen, not just whole-song averages
       const musicContext = track ? (() => {
         const avg = (a: ArrayLike<number>) => a.length ? Array.from(a).reduce((s, v) => s + v, 0) / a.length : 0;
         return {
@@ -1453,6 +1455,7 @@ function ShowChat({
           avgMid:  avg(track.analysis.mid),
           avgHigh: avg(track.analysis.high),
           lyrics: lyricsText.trim() || undefined,
+          segments: track.analysis.segments,  // per-4-bar energy timeline
         };
       })() : undefined;
 
@@ -1808,7 +1811,7 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
 
       // ── 2D animation overlay ──────────────────────────────────────
       if (vs.animationCode) {
-        runCustomAnimation(ctx, vs.animationCode, cx, cy, W, H, animOffset, color, vs.energy);
+        runCustomAnimation(ctx, vs.animationCode, cx, cy, W, H, animOffset, color, vs.energy, vs.bass, vs.mid, vs.high, vs.beat, vs.bar);
       } else if (vs.animationStyle !== "none") {
         drawLaserAnimation(ctx, cx, cy, W, H, vs.animationStyle, animOffset, color, r255, g255, b255, vs.energy);
       }
@@ -2418,6 +2421,11 @@ function runCustomAnimation(
   t: number,
   color: string,
   energy: number,
+  bass: number,
+  mid: number,
+  high: number,
+  beat: number,
+  bar: number,
 ) {
   const dpr = window.devicePixelRatio;
   const R   = Math.min(W, H) * 0.38;
@@ -2433,9 +2441,10 @@ function runCustomAnimation(
     const fn = new Function(
       "ctx", "t", "energy", "cx", "cy", "W", "H", "color", "R", "dpr",
       "Math", "performance",
+      "bass", "mid", "high", "beat", "bar",
       code,
     );
-    fn(ctx, t, energy, cx, cy, W, H, color, R, dpr, Math, performance);
+    fn(ctx, t, energy, cx, cy, W, H, color, R, dpr, Math, performance, bass, mid, high, beat, bar);
   } catch {
     // Silently swallow errors in AI-generated code so the show keeps running
   }

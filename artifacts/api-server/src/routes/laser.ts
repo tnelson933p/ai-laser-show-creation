@@ -4,24 +4,16 @@ type ChatCompletionMessageParam = { role: "system" | "user" | "assistant"; conte
 
 const router = Router();
 
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/laser/analyze
-// Body: { brand: string, model: string, channelCount: number, colorMode: string, scanTier: string, features: string[] }
-// Returns: streaming SSE with AI-generated deep analysis & show strategy
+// ─────────────────────────────────────────────────────────────────────────────
 router.post("/laser/analyze", async (req, res) => {
   const { brand, model, channelCount, colorMode, scanTier, features, availableColors } = req.body as {
-    brand: string;
-    model: string;
-    channelCount: number;
-    colorMode: string;
-    scanTier: string;
-    features: string[];
-    availableColors: string[];
+    brand: string; model: string; channelCount: number; colorMode: string;
+    scanTier: string; features: string[]; availableColors: string[];
   };
 
-  if (!brand || !model) {
-    res.status(400).json({ error: "brand and model are required" });
-    return;
-  }
+  if (!brand || !model) { res.status(400).json({ error: "brand and model are required" }); return; }
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -72,11 +64,8 @@ Keep the response focused, expert-level, and under 300 words. Use specific numbe
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
-      }
+      if (content) res.write(`data: ${JSON.stringify({ content })}\n\n`);
     }
-
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
     res.end();
   } catch (err) {
@@ -89,7 +78,7 @@ Keep the response focused, expert-level, and under 300 words. Use specific numbe
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/laser/chat
 // Multi-turn conversational AI show director.
-// Body: { laser, messages: [{role,content}][], currentSettings }
+// Body: { laser, messages: [{role,content}][], currentSettings, musicContext }
 // Streams SSE. AI may embed <settings>{...}</settings> to update show params.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/laser/chat", async (req, res) => {
@@ -111,6 +100,14 @@ router.post("/laser/chat", async (req, res) => {
       avgMid: number;
       avgHigh: number;
       lyrics?: string;
+      segments?: Array<{
+        bar: number;
+        bass: number;
+        mid: number;
+        high: number;
+        energy: number;
+        level: string;
+      }>;
     };
   };
 
@@ -123,260 +120,270 @@ router.post("/laser/chat", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
+  // ── Build energy timeline text ─────────────────────────────────────────
+  const secPerBar = musicContext ? (60 / musicContext.bpm) * 4 : 2;
+  const totalBars = musicContext ? Math.round(musicContext.duration / secPerBar) : 0;
+
+  const energyTimelineText = (musicContext?.segments && musicContext.segments.length > 0)
+    ? `\nENERGY TIMELINE — mandatory reference for scene energy placement:
+(Every 4 bars. Align your scenes so scene energy matches bar energy. Do NOT put strobe/PEAK scenes on QUIET bars.)
+${ musicContext.segments.map(s => {
+    const barEnd = s.bar + 3;
+    const lvlTag =
+      s.level === "quiet" ? "QUIET" :
+      s.level === "low"   ? "LOW  " :
+      s.level === "med"   ? "MED  " :
+      s.level === "high"  ? "HIGH " : "PEAK ";
+    const bar3 = String(s.bar).padStart(3);
+    const end3 = String(barEnd).padStart(3);
+    return `  bars ${bar3}-${end3}: ${lvlTag} energy=${Math.round(s.energy * 100)}%  bass=${Math.round(s.bass * 100)}% mid=${Math.round(s.mid * 100)}% high=${Math.round(s.high * 100)}%`;
+  }).join("\n") }
+
+Scene energy rules (non-negotiable):
+  QUIET bars → lissajous/sweep, movementSpeed 0.4-0.5, no strobe, no grating, colorIntensity 1.0-1.3
+  LOW bars   → sweep/lissajous, zoomEnabled:true, bassThreshold 0.4, colorIntensity 1.2-1.4
+  MED bars   → varied patterns, colorIntensity 1.4-1.6, zoomEnabled:true, gratingEnabled optional
+  HIGH bars  → bounce/sweep, gratingEnabled:true, colorIntensity 1.7-1.9, movementSpeed 0.8-1.1
+  PEAK bars  → bounce, strobeEnabled allowed (max 2 scenes total), colorIntensity 2.0, gratingEnabled:true`
+    : "";
+
+  // ── Build music section ────────────────────────────────────────────────
+  const musicSection = musicContext
+    ? `
+LOADED TRACK:
+  File: ${musicContext.filename}
+  BPM: ${musicContext.bpm} → 1 bar = ${secPerBar.toFixed(2)}s | 4 bars = ${(secPerBar * 4).toFixed(1)}s | 8 bars = ${(secPerBar * 8).toFixed(1)}s
+  Duration: ${Math.floor(musicContext.duration / 60)}:${String(Math.floor(musicContext.duration % 60)).padStart(2, "0")} (${totalBars} bars total)
+  Status: ${musicContext.isPlaying ? "▶ PLAYING NOW" : "⏸ paused/stopped"}
+  Overall energy — Bass: ${(musicContext.avgBass * 100).toFixed(0)}% | Mid: ${(musicContext.avgMid * 100).toFixed(0)}% | High: ${(musicContext.avgHigh * 100).toFixed(0)}%
+${energyTimelineText}
+${musicContext.lyrics ? `
+LYRIC TIMESTAMPS (user-provided — use these to pin specific visuals to specific moments):
+${musicContext.lyrics}
+
+LYRIC-SYNC INSTRUCTIONS:
+1. Parse each timestamp (M:SS) → bar = floor(timeInSeconds / ${secPerBar.toFixed(2)})
+2. durationBars = gap from this timestamp to next (or end)
+3. The animationCode for that scene MUST literally illustrate the lyric:
+   "hands up" / "raise your hands" → detailed crowd silhouettes with arms fully extended overhead
+   "butterfly" / "wings" → butterfly or bird flock with flapping bezier curves
+   "love" / "heart" → parametric heart curve pulsing on bass hits
+   "rain" / "tears" / "falling" → vertical streaks cascading from top to bottom
+   "electric" / "lightning" → jagged branching bolt paths splitting from a center point
+   "universe" / "galaxy" / "space" → rotating spiral galaxy arms with orbiting particles
+   "fire" / "burn" / "flame" → upward-flickering flame silhouettes reacting to bass
+   "rise" / "ascend" / "lift" → expanding concentric rings erupting from center
+   "crowd" / "people" / "everybody" → dense crowd with bobbing silhouettes
+   — Don't limit yourself to these; invent something the audience will RECOGNIZE immediately
+4. Make the visual so literal and bold that a blindfolded person told the lyric would say "yes, exactly"
+` : ""}Energy advice: bass=${(musicContext.avgBass * 100).toFixed(0)}% → ${musicContext.avgBass > 0.4 ? "lower bassThreshold (0.2-0.3), enable zoom" : "moderate bassThreshold (0.35-0.5)"}. high=${(musicContext.avgHigh * 100).toFixed(0)}% → ${musicContext.avgHigh > 0.35 ? "grating on, faster patterns" : "grating optional"}.`
+    : "\nNo track loaded — give general show advice until the user loads music.";
+
+  // ── Settings reference (shown once as a structured doc) ───────────────
   const settingsDoc = `
 ═══════════════════════════════════════════════════════
-SCENE PARAMETERS — every scene needs all fields, NO LABEL:
+SCENE PARAMETER REFERENCE
 ═══════════════════════════════════════════════════════
 
-durationBars: integer
-  → Scene length in musical bars (4/4 time). CRITICAL MATH:
-    At 120 BPM → 1 bar = 2.0 sec | 2 bars = 4 sec | 4 bars = 8 sec | 8 bars = 16 sec
-    At 100 BPM → 1 bar = 2.4 sec | 3 bars = 7.2 sec | 4 bars = 9.6 sec
-    At 90  BPM → 1 bar = 2.7 sec | 3 bars = 8.0 sec | 4 bars = 10.7 sec
-    At 80  BPM → 1 bar = 3.0 sec | 2 bars = 6 sec | 3 bars = 9 sec
-  → ALWAYS calculate using the actual BPM from the music context above.
+label: string (ENCOURAGED — name each scene: "INTRO", "BUILD", "DROP 1", "BREAKDOWN", "CLIMAX", "OUTRO")
 
-animationCode: string (REQUIRED — write JavaScript that draws the animation)
-  ─────────────────────────────────────────────────────
-  YOU ARE A CREATIVE CODER. Write canvas drawing code for each scene.
-  You have complete creative freedom — draw anything the music demands.
-  Animals, crowds, geometry, space, architecture, nature, abstract art — anything.
-  ─────────────────────────────────────────────────────
-  VARIABLES IN SCOPE (do NOT redeclare these):
-    ctx    — CanvasRenderingContext2D, already configured with laser glow + color
-    t      — time in seconds (always increasing) — use Math.sin(t*speed) to animate
-    energy — 0..1 live music energy — scale sizes, counts, brightness with this
-    cx, cy — canvas center in pixels
-    W, H   — canvas width/height in pixels
-    R      — reference radius = 0.38 * min(W,H) — base all your sizes on R
-    color  — hex string e.g. "#00ff9d" — current laser color
-    dpr    — device pixel ratio — multiply lineWidth values by dpr
-    Math, performance — standard globals available
+durationBars: integer — scene length in musical bars (4/4 time)
+  At ${musicContext ? musicContext.bpm.toFixed(0) : 120} BPM → 1 bar = ${secPerBar.toFixed(2)}s | 4 bars = ${(secPerBar * 4).toFixed(1)}s | 8 bars = ${(secPerBar * 8).toFixed(1)}s | 16 bars = ${(secPerBar * 16).toFixed(1)}s
 
-  ctx IS PRE-SET with:
-    strokeStyle=color, shadowColor=color, shadowBlur active,
-    lineWidth=(1.4+energy)*dpr, lineCap="round", globalAlpha=0.65+energy*0.3
+animationCode: string — JavaScript canvas code for this scene's visual
+  ─────────────────────────────────────────────────────
+  VARIABLES IN SCOPE (never redeclare these):
+    ctx     — CanvasRenderingContext2D, pre-configured with laser glow + color
+    t       — time in seconds (always increasing) — Math.sin(t*freq) for smooth motion
+    energy  — 0..1 combined energy (bass×0.5 + mid×0.3 + high×0.2)
+    bass    — 0..1 LIVE kick/sub energy ← drives size pulses, explosion radii, crowd height
+    mid     — 0..1 LIVE melody/chord energy ← drives secondary motion, shape complexity
+    high    — 0..1 LIVE hi-hat/snare energy ← drives sparkle counts, edge detail, shimmer
+    beat    — 0..1 position within current BPM beat (resets to 0 on EVERY beat)
+              ← THE MOST POWERFUL VARIABLE: use for beat-locked flashes and pulses
+              Example: Math.max(0, 1 - beat*6)*bass  →  sharp kick-drum flash, fast decay
+              Example: Math.sin(beat*Math.PI)         →  smooth 0→1→0 pulse each beat
+    bar     — integer bar number (0-indexed) ← for bar-count-aware effects
+              Example: bar%4===0  → phrase start trigger
+              Example: Math.sin(bar*0.5+t)  → slow phrase-level color oscillation
+    cx, cy  — canvas center in pixels
+    W, H    — canvas width/height in pixels
+    R       — reference radius = 0.38×min(W,H) — base ALL sizes on R
+    color   — hex string e.g. "#00ff9d" — current laser color
+    dpr     — device pixel ratio — multiply lineWidth values by dpr
+    Math, performance — standard globals
+
+  ctx IS PRE-SET with: strokeStyle=color, shadowColor=color, shadowBlur active,
+    lineWidth=(1.4+energy)×dpr, lineCap="round", globalAlpha=0.65+energy×0.3
   → Override freely. Use ctx.save()/ctx.restore() to isolate state changes.
 
   RULES:
-    • ALWAYS stroke, NEVER fill — laser = traced vector paths, not solid shapes
-    • Animate with t: Math.sin(t*speed), (t*freq)%(2*Math.PI), etc.
-    • React to music: scale counts/sizes by energy, branch on energy>0.5
-    • Use ctx.globalAlpha for brightness variation between sub-elements
+    • ALWAYS stroke, NEVER fill — laser = traced vector paths
+    • Animate with t: Math.sin(t*speed), (t*freq)%(2*Math.PI)
+    • React to music: use bass/mid/high/beat for immediate reactivity
+    • Beat-lock critical effects: flash on bass beat, shimmer on high beat
     • Write AMBITIOUS code — 20 to 60 lines. Intricate layered visuals. Simple = boring.
     • No async, no DOM, no external refs.
 
-  EXAMPLE PATTERNS — study the complexity level, then create your own from scratch:
+  EXAMPLE PATTERNS — study the complexity, technique, and beat-reactivity. Create originals:
 
-  // [ALL SCANNERS] Crowd of 8 detailed silhouettes — head+shoulders+torso+arms+legs, bobbing to beat
-  // Each figure: circle head, angled shoulders, torso taper, arms fully raised with elbows, legs spread with feet
-  for(let i=0;i<8;i++){
-    const fx=cx+(i-3.5)*W*.115,bob=Math.sin(t*2.2+i*.7)*R*.05*(1+energy*.6);
-    const fh=R*.72,fy=cy+R*.28+bob;
-    // head
-    ctx.beginPath();ctx.arc(fx,fy-fh*.93,fh*.09,0,Math.PI*2);ctx.stroke();
-    // body: shoulders → waist → hips
-    ctx.beginPath();
-    ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*.22,fy-fh*.78); // shoulder line
-    ctx.moveTo(fx,fy-fh*.78);ctx.lineTo(fx,fy-fh*.38); // spine
-    ctx.moveTo(fx-fh*.16,fy-fh*.38);ctx.lineTo(fx+fh*.16,fy-fh*.38); // hip line
-    ctx.stroke();
-    // arms fully raised overhead with bent elbows
-    const armSwing=Math.sin(t*2.2+i*.7)*(energy>.5?.12:.06);
-    ctx.beginPath();
-    ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx-fh*(.32+armSwing),fy-fh*(1.05+energy*.18));
-    ctx.moveTo(fx+fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*(.32-armSwing),fy-fh*(1.05+energy*.18));
-    ctx.stroke();
-    // legs with spread feet
-    ctx.beginPath();
-    ctx.moveTo(fx-fh*.08,fy-fh*.38);ctx.lineTo(fx-fh*.22,fy+fh*.02); // left thigh
-    ctx.moveTo(fx-fh*.22,fy+fh*.02);ctx.lineTo(fx-fh*.28,fy+fh*.38); // left shin+foot
-    ctx.moveTo(fx+fh*.08,fy-fh*.38);ctx.lineTo(fx+fh*.22,fy+fh*.02); // right thigh
-    ctx.moveTo(fx+fh*.22,fy+fh*.02);ctx.lineTo(fx+fh*.28,fy+fh*.38); // right shin+foot
-    ctx.stroke();
+  // [ALL] Beat-locked expanding rings + hi-hat sparkle halo
+  const kick=Math.max(0,1-beat*6)*bass; // sharp attack, instant decay on each beat
+  for(let ring=0;ring<4;ring++){
+    const r=R*(.2+ring*.22+kick*.35*(1-ring*.2));
+    ctx.globalAlpha=(.75-ring*.15)*(0.2+kick*.8);
+    ctx.lineWidth=(2.5-ring*.4)*dpr;
+    ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.stroke();
+  }
+  const sparkN=Math.round(10+high*24);
+  for(let i=0;i<sparkN;i++){
+    const a=i/sparkN*Math.PI*2+t*.4;
+    const sr=R*(.85+Math.sin(t*high*7+i)*.12+high*.18);
+    ctx.globalAlpha=0.2+high*.65;ctx.lineWidth=1.2*dpr;
+    ctx.beginPath();ctx.arc(cx+Math.cos(a)*sr,cy+Math.sin(a)*sr,R*.022,0,Math.PI*2);ctx.stroke();
   }
 
-  // [ALL SCANNERS] City skyline silhouette — buildings of varied heights, windows, animated beacon lights
-  const bldgs=[.35,.55,.42,.7,.48,.62,.38,.52,.65,.44];
-  bldgs.forEach((h,i)=>{
-    const bx=cx-W*.45+i*W*.1,bw=W*.075,bh=H*h*(0.9+energy*.15),by=cy+H*.35;
-    ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx,by-bh);ctx.lineTo(bx+bw,by-bh);ctx.lineTo(bx+bw,by);ctx.stroke();
-    // windows (2 columns per building)
-    for(let row=1;row<=Math.floor(bh/(H*.07));row++){
-      ctx.globalAlpha=.35+energy*.25;ctx.beginPath();
-      ctx.moveTo(bx+bw*.22,by-row*H*.065);ctx.lineTo(bx+bw*.22,by-row*H*.065+H*.04);
-      ctx.moveTo(bx+bw*.62,by-row*H*.065);ctx.lineTo(bx+bw*.62,by-row*H*.065+H*.04);
-      ctx.stroke();
-    }
-    // antenna beacon on tallest buildings
-    if(h>.58){ctx.globalAlpha=.7+energy*.3;ctx.beginPath();ctx.arc(bx+bw*.5,by-bh-R*.06*(1+Math.sin(t*3+i)*.3),R*.025,0,Math.PI*2);ctx.stroke();}
-  });
+  // [ALL] Crowd of 8 full-body silhouettes — arms raised overhead, legs with feet, bobbing to beat
+  for(let i=0;i<8;i++){
+    const fx=cx+(i-3.5)*W*.115,bob=Math.sin(beat*Math.PI*2+i*.7)*R*.05*(1+energy*.6);
+    const fh=R*.72,fy=cy+R*.28+bob;
+    ctx.beginPath();ctx.arc(fx,fy-fh*.93,fh*.09,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*.22,fy-fh*.78);
+    ctx.moveTo(fx,fy-fh*.78);ctx.lineTo(fx,fy-fh*.38);
+    ctx.moveTo(fx-fh*.16,fy-fh*.38);ctx.lineTo(fx+fh*.16,fy-fh*.38);ctx.stroke();
+    const armSwing=Math.sin(beat*Math.PI*2+i*.7)*(energy>.5?.12:.06);
+    ctx.beginPath();
+    ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx-fh*(.32+armSwing),fy-fh*(1.05+energy*.18));
+    ctx.moveTo(fx+fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*(.32-armSwing),fy-fh*(1.05+energy*.18));ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(fx-fh*.08,fy-fh*.38);ctx.lineTo(fx-fh*.22,fy+fh*.02);
+    ctx.moveTo(fx-fh*.22,fy+fh*.02);ctx.lineTo(fx-fh*.28,fy+fh*.38);
+    ctx.moveTo(fx+fh*.08,fy-fh*.38);ctx.lineTo(fx+fh*.22,fy+fh*.02);
+    ctx.moveTo(fx+fh*.22,fy+fh*.02);ctx.lineTo(fx+fh*.28,fy+fh*.38);ctx.stroke();
+  }
 
-  // [MID+] Rotating wireframe cube — all 12 edges with depth shading
-  const s=R*.5,ca=Math.cos(t*.5),sa=Math.sin(t*.5),cb=Math.cos(t*.3),sb=Math.sin(t*.3);
+  // [MID+] DNA double-helix — bass drives width, mid drives twist speed, high drives rung shimmer
+  const twist=t*(0.7+mid*1.4);const hw=R*(.14+bass*.32);const hh=H*.72;
+  for(let strand=0;strand<2;strand++){
+    const ph=strand*Math.PI;ctx.beginPath();
+    for(let i=0;i<=70;i++){const fy=cy-hh/2+(i/70)*hh;const fx=cx+Math.sin(i/70*Math.PI*5+twist+ph)*hw;i?ctx.lineTo(fx,fy):ctx.moveTo(fx,fy);}
+    ctx.globalAlpha=0.5+mid*.35;ctx.stroke();
+  }
+  for(let i=2;i<70;i+=3){
+    const fy=cy-hh/2+(i/70)*hh;
+    const fx1=cx+Math.sin(i/70*Math.PI*5+twist)*hw,fx2=cx+Math.sin(i/70*Math.PI*5+twist+Math.PI)*hw;
+    ctx.globalAlpha=(0.15+high*.5)*(0.5+Math.sin(beat*Math.PI*2+i)*.5);
+    ctx.beginPath();ctx.moveTo(fx1,fy);ctx.lineTo(fx2,fy);ctx.stroke();
+  }
+
+  // [MID+] Rotating wireframe cube — 12 edges with depth shading, bass drives size
+  const s=R*(.45+bass*.2),ca=Math.cos(t*.5),sa=Math.sin(t*.5),cb=Math.cos(t*.3),sb=Math.sin(t*.3);
   const p3=(x,y,z)=>{const rx=x*ca-z*sa,rz=x*sa+z*ca,ry=y*cb-rz*sb;return[cx+rx*1.8,cy+ry*1.8];};
   const verts=[[-1,-1,-1],[-1,-1,1],[-1,1,-1],[-1,1,1],[1,-1,-1],[1,-1,1],[1,1,-1],[1,1,1]].map(([x,y,z])=>p3(x*s,y*s,z*s));
   [[0,1],[0,2],[1,3],[2,3],[4,5],[4,6],[5,7],[6,7],[0,4],[1,5],[2,6],[3,7]].forEach(([a,b],ei)=>{
     ctx.globalAlpha=(.45+energy*.35)*(1-(ei%3)*.12);ctx.beginPath();ctx.moveTo(verts[a][0],verts[a][1]);ctx.lineTo(verts[b][0],verts[b][1]);ctx.stroke();
   });
-  // central axis glow
-  ctx.globalAlpha=.8+energy*.2;ctx.beginPath();ctx.arc(cx,cy,R*(0.08+energy*.06),0,Math.PI*2);ctx.stroke();
+  ctx.globalAlpha=.8+energy*.2;ctx.beginPath();ctx.arc(cx,cy,R*(.08+energy*.06),0,Math.PI*2);ctx.stroke();
 
-  // [MID+] Phoenix / bird in flight — wingspan spread, tail plumes, rising with energy
-  const wingSpan=R*(1.1+energy*.35),flap=Math.sin(t*3.5)*0.28;
-  const birdX=cx+Math.sin(t*.4)*R*.5,birdY=cy-energy*R*.3+Math.cos(t*.55)*R*.2;
-  // body
-  ctx.beginPath();ctx.moveTo(birdX-R*.08,birdY);ctx.bezierCurveTo(birdX,birdY-R*.22,birdX,birdY-R*.22,birdX+R*.22,birdY+R*.05);ctx.stroke();
-  // head + beak
-  ctx.beginPath();ctx.arc(birdX+R*.2,birdY+R*.04,R*.05,0,Math.PI*2);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(birdX+R*.25,birdY+R*.04);ctx.lineTo(birdX+R*.34,birdY+R*.04);ctx.stroke();
-  // left wing (3 primary feather strokes)
-  for(let f=0;f<3;f++){ctx.beginPath();ctx.moveTo(birdX,birdY);ctx.bezierCurveTo(birdX-wingSpan*.3-f*R*.1,birdY-R*(.35+flap+f*.08),birdX-wingSpan*.55-f*R*.05,birdY-R*(.1+flap*.5+f*.04),birdX-wingSpan*(0.7+f*.12),birdY+R*(flap*.4+f*.06));ctx.stroke();}
-  // right wing mirror
-  for(let f=0;f<3;f++){ctx.beginPath();ctx.moveTo(birdX,birdY);ctx.bezierCurveTo(birdX+wingSpan*.1+f*R*.05,birdY-R*(.25+flap+f*.06),birdX+wingSpan*.25+f*R*.05,birdY-R*(.08+flap*.4+f*.03),birdX+wingSpan*(0.35+f*.08),birdY+R*(flap*.3+f*.04));ctx.stroke();}
-  // tail plumes rising with energy
-  for(let p=0;p<4;p++){ctx.beginPath();ctx.moveTo(birdX-R*.06,birdY+R*.04);ctx.quadraticCurveTo(birdX-R*(.2+p*.08),birdY+R*(.22+p*.1)+Math.sin(t*2.5+p)*.12*R,birdX-R*(.32+p*.1),birdY+R*(.42+p*.14));ctx.stroke();}
-
-  // [FAST+] Aurora borealis — layered sine curtains with alpha shimmer
+  // [FAST+] Aurora borealis — layered sine curtains with vertical shafts, high drives shimmer
   for(let layer=0;layer<5;layer++){
     const yBase=cy-R*.1+layer*H*.1-energy*H*.08;
     const freq=1.2+layer*.3,amp=H*(.06+energy*.05+layer*.015),spd=.5+layer*.2;
     ctx.globalAlpha=(0.25+energy*.2)*(1-layer*.15);ctx.beginPath();
-    for(let x=0;x<=W;x+=5){
-      const y=yBase+Math.sin(x/W*Math.PI*2*freq+t*spd)*amp+Math.sin(x/W*Math.PI*3.7+t*(spd*.7))*amp*.4;
-      x?ctx.lineTo(x,y):ctx.moveTo(x,y);
-    }ctx.stroke();
+    for(let x=0;x<=W;x+=5){const y=yBase+Math.sin(x/W*Math.PI*2*freq+t*spd)*amp+Math.sin(x/W*Math.PI*3.7+t*(spd*.7))*amp*.4;x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();
   }
-  // vertical shafts of light
   for(let sh=0;sh<6;sh++){
     const sx=cx+(sh-2.5)*W*.15+Math.sin(t*.3+sh)*W*.04;
-    ctx.globalAlpha=(.15+energy*.2)*(.6+Math.sin(t*.8+sh)*.4);ctx.beginPath();
-    ctx.moveTo(sx,cy-R*(1.2+energy*.3));ctx.lineTo(sx+R*.06,cy+R*.5);ctx.stroke();
+    ctx.globalAlpha=(.12+high*.25)*(.6+Math.sin(beat*Math.PI*2+sh)*.4);
+    ctx.beginPath();ctx.moveTo(sx,cy-R*(1.2+energy*.3));ctx.lineTo(sx+R*.06,cy+R*.5);ctx.stroke();
   }
 
-  // [FAST+] Ocean waves with whitecaps — reduce step count on slower scanners
-  for(let w=0;w<4;w++){ctx.globalAlpha=(0.35+energy*.3)*(1-w*.18);ctx.beginPath();for(let x=0;x<=W;x+=8){const y=cy+(w-1.5)*H*.14+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))*H*(0.06+energy*.07);x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}
-  // whitecap dots on wave peaks
-  for(let w=0;w<3;w++){for(let x=0;x<=W;x+=W*.12){const wcy=cy+(w-1)*H*.14+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))*H*(0.06+energy*.07);if(Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))>.6){ctx.globalAlpha=.6+energy*.3;ctx.beginPath();ctx.arc(x,wcy,R*.015,0,Math.PI*2);ctx.stroke();}}}
+  // [FAST+] Phoenix — bezier wings, tail plumes, energy-driven ascent, beat-locked wing flap
+  const flap=Math.sin(beat*Math.PI*2)*0.3+Math.sin(t*3.5)*0.1;
+  const bx=cx+Math.sin(t*.4)*R*.5,by=cy-energy*R*.32+Math.cos(t*.55)*R*.2;
+  const ws=R*(1.1+energy*.35);
+  ctx.beginPath();ctx.moveTo(bx-R*.08,by);ctx.bezierCurveTo(bx,by-R*.22,bx,by-R*.22,bx+R*.22,by+R*.05);ctx.stroke();
+  ctx.beginPath();ctx.arc(bx+R*.2,by+R*.04,R*.05,0,Math.PI*2);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(bx+R*.25,by+R*.04);ctx.lineTo(bx+R*.34,by+R*.04);ctx.stroke();
+  for(let f=0;f<3;f++){ctx.beginPath();ctx.moveTo(bx,by);ctx.bezierCurveTo(bx-ws*.3-f*R*.1,by-R*(.35+flap+f*.08),bx-ws*.55-f*R*.05,by-R*(.1+flap*.5+f*.04),bx-ws*(0.7+f*.12),by+R*(flap*.4+f*.06));ctx.stroke();}
+  for(let f=0;f<3;f++){ctx.beginPath();ctx.moveTo(bx,by);ctx.bezierCurveTo(bx+ws*.1+f*R*.05,by-R*(.25+flap+f*.06),bx+ws*.25+f*R*.05,by-R*(.08+flap*.4+f*.03),bx+ws*(0.35+f*.08),by+R*(flap*.3+f*.04));ctx.stroke();}
+  for(let p=0;p<4;p++){ctx.beginPath();ctx.moveTo(bx-R*.06,by+R*.04);ctx.quadraticCurveTo(bx-R*(.2+p*.08),by+R*(.22+p*.1)+Math.sin(t*2.5+p)*.12*R,bx-R*(.32+p*.1),by+R*(.42+p*.14));ctx.stroke();}
 
-  THESE ARE JUST STARTING POINTS. Invent something original for every scene.
-  Running horse. Phoenix. DNA strand. Neon cityscape. Waterfall. Fire tornado.
-  Two dancers mirroring. A solar system. Thunder and lightning. A blooming flower.
-  Make every single scene feel like a completely different visual universe — nothing repeated.
+  // [ALL] Parametric heart — beats with kick drum every beat
+  const heartPulse=1+Math.max(0,1-beat*5)*bass*.4;
+  ctx.beginPath();
+  for(let i=0;i<=80;i++){const a=i/80*Math.PI*2;const r=R*(.55+energy*.2)*heartPulse;const hx=cx+r*(Math.sin(a)**3)*1.2;const hy=cy-r*(.85*Math.cos(a)-.35*Math.cos(2*a)-.12*Math.cos(3*a)-.07*Math.cos(4*a));i?ctx.lineTo(hx,hy):ctx.moveTo(hx,hy);}
+  ctx.closePath();ctx.globalAlpha=0.6+energy*.35;ctx.stroke();
+  for(let ring=1;ring<4;ring++){ctx.globalAlpha=(0.4-ring*.08)*(0.3+bass*.5);ctx.beginPath();for(let i=0;i<=80;i++){const a=i/80*Math.PI*2;const r=R*(.55+energy*.2)*heartPulse*(1+ring*.18);const hx=cx+r*(Math.sin(a)**3)*1.2;const hy=cy-r*(.85*Math.cos(a)-.35*Math.cos(2*a)-.12*Math.cos(3*a)-.07*Math.cos(4*a));i?ctx.lineTo(hx,hy):ctx.moveTo(hx,hy);}ctx.closePath();ctx.stroke();}
+
+  THESE ARE STARTING POINTS ONLY. Invent something completely original every scene.
+  Running horse. Neon cityscape. Waterfall. Fire tornado. Solar system. Two dancers.
+  Thunder and lightning. A blooming flower. Rain of meteors. A spinning top.
+  Make every scene feel like a completely different visual universe — nothing ever repeated.
   ─────────────────────────────────────────────────────
 
   ★ HARDWARE CONSTRAINTS — YOUR CODE MUST RESPECT THESE OR THE SHOW BREAKS ★
   ─────────────────────────────────────────────────────
-  This laser is: ${laser.brand} ${laser.model} | Scanner: ${laser.scanTier} | Colors: ${(laser.availableColors ?? []).join(", ")} | Color mode: ${laser.colorMode}${laser.maxPowerMw ? ` | Power: ${laser.maxPowerMw}mW` : ""}
+  Laser: ${laser.brand} ${laser.model} | Scanner: ${laser.scanTier} | Colors: ${(laser.availableColors ?? []).join(", ")} | Mode: ${laser.colorMode}${laser.maxPowerMw ? ` | ${laser.maxPowerMw}mW` : ""}
 
-${laser.scanTier === "budget" ? `  SCANNER: BUDGET (8–12 KPPS) — STRICT PATH LIMITS
-  Real laser scanners draw points sequentially. Too many points per frame = visible flicker.
-  • Max ~60 points per ctx.beginPath()…stroke() call (each loop iteration = 1 point)
+${laser.scanTier === "budget" ? `  BUDGET SCANNER (8–12 KPPS) — STRICT PATH LIMITS
+  • Max ~60 points per stroke call (each loop iteration = 1 point)
   • Max 3 separate stroke calls per scene total
-  • Forbidden: dense spirals, fine particle systems, high-res bezier curves, large loop counts
-  • GOOD: simple geometric shapes (triangles, pentagons, stars with 5-7 points), straight lines,
-    wide sweeping arcs, 3-5 figure silhouettes, single bold wave (max 40 x-steps)
-  • EXAMPLE safe loop: for(let i=0;i<5;i++){...} NOT for(let i=0;i<200;i++){...}` : laser.scanTier === "mid" ? `  SCANNER: MID-TIER (12–18 KPPS) — MODERATE PATH LIMITS
-  • Max ~120 points per ctx.beginPath()…stroke() call
+  • Forbidden: dense spirals, fine particles, high-res beziers, large loop counts
+  • GOOD: simple geometry (triangles, stars 5-7 pts), straight lines, wide arcs, 3-5 figures, 1 bold wave (max 40 x-steps)` : laser.scanTier === "mid" ? `  MID-TIER SCANNER (12–18 KPPS) — MODERATE PATH LIMITS
+  • Max ~120 points per stroke call
   • Max 6 separate stroke calls per scene total
-  • OK: moderate spirals (max 3 turns, 80 steps), 6-8 figure crowds, layered waves (3 layers, 40 x-steps each)
-  • Avoid: particle systems with 50+ dots, ultra-dense Lissajous, sub-pixel detail
-  • GOOD patterns: bezier curves (3-4 control points), simple 3D wireframes (cube/pyramid), 5-7 petals` : laser.scanTier === "fast" ? `  SCANNER: FAST (18–25 KPPS) — MODERATE-HIGH PATH LIMITS
-  • Max ~200 points per ctx.beginPath()…stroke() call
+  • OK: moderate spirals (max 3 turns, 80 steps), 6-8 crowd figures, 3 wave layers (40 x-steps each)
+  • Avoid: 50+ particle dots, ultra-dense Lissajous` : laser.scanTier === "fast" ? `  FAST SCANNER (18–25 KPPS) — MODERATE-HIGH PATH LIMITS
+  • Max ~200 points per stroke call
   • Max 10 separate stroke calls per scene total
-  • OK: complex spirals (5 turns, 150 steps), 3D wireframes, 10-figure crowds, 5-layer waves
-  • Fine details visible: can use tighter bezier curves, moderate particle counts (20-30)` : `  SCANNER: PRO (25–40 KPPS) — FULL CREATIVE FREEDOM
-  • Max ~400 points per ctx.beginPath()…stroke() call
-  • Up to 15+ separate stroke calls per scene
-  • Complex spirals, dense particle systems, fine 3D geometry — all safe
-  • This laser can render anything you can imagine at full frame rate`}
+  • OK: complex spirals (5 turns, 150 steps), 3D wireframes, 10-figure crowds, 5-layer waves, 20-30 particles` : `  PRO SCANNER (25–40 KPPS) — FULL CREATIVE FREEDOM
+  • Max ~400 points per stroke call, up to 15+ separate stroke calls
+  • Complex spirals, dense particles, fine 3D geometry — all safe
+  • This scanner renders anything you can imagine at full frame rate`}
 
-${(laser.colorMode === "rgb" || laser.colorMode === "rgb-full") ? `  COLOR: RGB FULL — You have red, green, and blue. The 'color' variable carries the current laser color.
-  • Single-color animation: stroke everything in 'color' (already default — laser reacts to music)
-  • Grating fan: at choruses, pairing with gratingEnabled:true fans the colored beam across the room
-  • Design for one vivid laser color at a time — the engine picks the color, you pick the shapes` : laser.colorMode === "indexed" ? `  COLOR: INDEXED PALETTE — Fixed color slots (${(laser.availableColors ?? []).join(", ")})
-  • The 'color' variable reflects the active indexed color — design shapes that work in any single color
-  • Rely on shape variety and movement for visual interest, not color mixing
-  • Bold simple outlines read better than fine detail with this color system` : `  COLOR: SINGLE COLOR (${(laser.availableColors ?? []).join(", ")}) — Monochrome laser
-  • All beams are the same color. Use ctx.globalAlpha variations (0.2 to 1.0) for depth.
-  • Design for high contrast: thick bold strokes for important elements, thin for secondary
-  • No color variety — compensate with shape drama, scale contrast, and alpha layering`}
+${laser.colorMode === "rgb" || laser.colorMode === "rgb-full" ? `  COLOR: RGB FULL — 'color' carries the active laser color (engine picks it, you pick shapes)
+  • Design for one vivid color at a time — high contrast shapes read best
+  • At choruses/peaks: pair with gratingEnabled:true to fan the colored beam across the room` : laser.colorMode === "indexed" ? `  COLOR: INDEXED PALETTE (${(laser.availableColors ?? []).join(", ")})
+  • 'color' reflects the active indexed slot — design for any single color
+  • Bold simple outlines over fine detail` : `  COLOR: SINGLE (${(laser.availableColors ?? []).join(", ")}) — Monochrome
+  • Use ctx.globalAlpha (0.2–1.0) for depth. Bold strokes for foreground, thin for secondary.`}
   ─────────────────────────────────────────────────────
 
 movementStyle: "lissajous" | "sweep" | "bounce" | "step"
-  → How the beam center moves. Must rotate through ALL 4 across a show:
-    "lissajous" — figure-8/ellipse drift. Elegant. Use for stars and text moments.
-    "sweep"     — wide left-right pendulum. Anthem, crowd-pleasing.
-    "bounce"    — unpredictable energetic jumps. High-energy peak moments.
-    "step"      — beats-locked grid snaps. Mechanical, precise.
+  lissajous — figure-8/ellipse drift. Elegant. Best for stars, text, ambient.
+  sweep     — wide left-right pendulum. Anthem feel, crowd-pleasing.
+  bounce    — unpredictable energetic jumps. High-energy peaks and drops.
+  step      — beats-locked grid snaps. Mechanical, industrial, precise.
+  → Rotate through all 4 across a show. No style used more than 3× total.
 
 movementSpeed: 0.4–1.2 (float)
-  → 0.4 = glacial drift. 0.7 = elegant flow. 1.0 = alive. 1.2 = high-energy max.
-  → NEVER exceed 1.2. Faster looks like a bug on screen, not a laser show.
-  → Text scenes (textEnabled:true): cap at 0.7. Spiral/wave: 0.5–0.8. Fireworks peaks: 0.9–1.1.
+  0.4=glacial drift, 0.7=elegant, 1.0=alive, 1.2=maximum (HARD CAP — faster looks buggy)
+  Text scenes: cap at 0.7. Intro/ambient: 0.4-0.6. Peak drops: 0.9-1.2.
 
-colorIntensity: 1.0–2.0 (float)
-  → 1.0 = baseline. 1.4 = vivid. 1.8 = blazing. 2.0 = maximum only at finale/climax.
-  → Build intensity across the show — start around 1.3 and end at 2.0.
+colorIntensity: 1.0–2.0
+  1.0=baseline, 1.4=vivid, 1.8=blazing, 2.0=only at climax/finale
+  Build intensity across the show — start 1.2 and end 2.0.
 
 patternComplexity: "simple" | "medium" | "complex"
-  → Lissajous shape complexity. "simple" for text+wave, "complex" for intense climaxes.
+  Lissajous shape complexity. Use "simple" for text+intros, "complex" for peak moments.
 
-gratingEnabled: boolean
-  → Fans the beam into multiple rays filling the room. Use at choruses/peaks. NEVER during text.
-
-strobeEnabled: boolean
-  → White flash on treble hits. Maximum 2 scenes per show. NEVER during text. Only at true climax.
-
-zoomEnabled: boolean
-  → Bass makes the beam breathe outward. true for dance music, false for ambient.
-
-bassThreshold: 0.15–0.6
-  → How sensitive to kick drums. 0.2 = reactive. 0.4 = selective. 0.6 = only on huge hits.
-
-patternShiftBeats: 4 | 8 | 16 | 32
-  → How often beam shape cycles. 4 = frantic. 8 = driving. 16 = flowing. 32 = slow hypnotic.
+gratingEnabled: boolean — fans beam into multiple rays. Use at choruses/peaks. NEVER during text.
+strobeEnabled: boolean — white flash on treble. MAXIMUM 2 scenes total. NEVER during text.
+zoomEnabled: boolean — bass makes beam breathe outward. true for dance music, false for ambient.
+bassThreshold: 0.15–0.6 — kick sensitivity. 0.2=reactive, 0.4=selective, 0.6=only huge hits.
+patternShiftBeats: 4|8|16|32 — beam shape cycle speed. 4=frantic, 32=slow hypnotic.
 
 textEnabled: boolean + textContent: string
-  → Laser-traces text in glowing light. Keep 1–3 words. "AMERICA", "USA", "HAPPY 4TH", "FREEDOM", "2025".
-  → Pair with animationCode that draws a star/burst halo around the text.
+  Laser-traces text in glowing light. 1-3 words max. "DROP", "AMERICA", "TONIGHT", "LOVE".
+  Keep animationCode simple when textEnabled — a halo or slow ring. TEXT must dominate.
 
 Current show settings: ${JSON.stringify(currentSettings, null, 2)}`;
 
-  const secPerBar = musicContext ? (60 / musicContext.bpm) * 4 : 2;
-  const musicSection = musicContext
-    ? `
-CURRENT TRACK:
-- File: ${musicContext.filename}
-- BPM: ${musicContext.bpm} → 1 bar = ${secPerBar.toFixed(2)}s | 2 bars = ${(secPerBar * 2).toFixed(1)}s | 3 bars = ${(secPerBar * 3).toFixed(1)}s | 4 bars = ${(secPerBar * 4).toFixed(1)}s
-- Duration: ${Math.floor(musicContext.duration / 60)}:${String(Math.floor(musicContext.duration % 60)).padStart(2, "0")} (${(musicContext.duration / secPerBar).toFixed(0)} total bars)
-- Status: ${musicContext.isPlaying ? "PLAYING NOW" : "paused / stopped"}
-- Energy — Bass: ${(musicContext.avgBass * 100).toFixed(0)}% | Mid: ${(musicContext.avgMid * 100).toFixed(0)}% | High: ${(musicContext.avgHigh * 100).toFixed(0)}%
-${musicContext.lyrics ? `
-LYRIC TIMESTAMPS (user-provided — use these to time your scenes):
-${musicContext.lyrics}
+  const systemPrompt = `You are a world-class laser show director. You have designed shows for EDC, Coachella, Super Bowl halftimes, stadium tours, NYE Times Square, and Burning Man. Your shows make audiences gasp. You do not play it safe — you are bold, unexpected, and cinematic.
 
-LYRIC-SYNC INSTRUCTIONS:
-1. Parse each timestamp (M:SS format) and convert to bar number: bar = floor(timeSeconds / ${secPerBar.toFixed(2)})
-2. Calculate durationBars as the gap between this timestamp and the next one (or end of song)
-3. Write an animationCode that LITERALLY ILLUSTRATES the lyric/moment:
-   - "hands up" / "raise your hands" → draw 10–12 detailed crowd silhouettes (head, shoulders, torso, legs spread, arms fully extended overhead) bobbing to beat — scale crowd count and arm height with energy
-   - "butterfly" / "wings" / flying animals → write a butterfly or bird flock with flapping bezier wings
-   - "love" / "heart" → draw a parametric heart pulsing with energy
-   - "rain" / "tears" / falling → write vertical streaks falling top-to-bottom
-   - "electric" / "lightning" / "thunder" → write jagged branching bolt paths
-   - "universe" / "galaxy" / "space" → write a rotating spiral galaxy with star particles
-   - "fire" / "burn" → write upward-flickering flame shapes
-   - "rise" / "build" / intro → write expanding rings or an ascending wave
-   - Don't limit yourself to these — invent visuals that match the specific lyric
-4. The animation must make the audience RECOGNIZE what the lyric says — be literal and bold
-` : ""}
-Energy advice: Bass ${(musicContext.avgBass * 100).toFixed(0)}% → ${musicContext.avgBass > 0.4 ? "lower bassThreshold (0.2–0.3), enable zoom" : "moderate bassThreshold (0.35–0.5)"}. High ${(musicContext.avgHigh * 100).toFixed(0)}% → ${musicContext.avgHigh > 0.35 ? "grating on, faster movement" : "grating optional"}.`
-    : "\nNo track loaded yet — give general advice until the user loads music.";
-
-  const systemPrompt = `You are a world-class laser show designer and DMX programmer. You have designed shows for Super Bowl halftimes, stadium concerts, 4th of July national events, NYE Times Square, and major music festivals. Your shows are bold, unexpected, and remembered. You do not play it safe.
-
-Laser: ${laser.brand} ${laser.model} | DMX: ${laser.channelCount}ch | Colors: ${(laser.availableColors ?? []).join(", ")} | Scanner: ${laser.scanTier}
+Laser: ${laser.brand} ${laser.model} | ${laser.channelCount}ch DMX | Colors: ${(laser.availableColors ?? []).join(", ")} | Scanner: ${laser.scanTier}
 Notes: ${(laser.notes as string | undefined) ?? "none"}
 Features: ${(laser.specialFeatures ?? []).join(" | ") || "standard"}
 ${musicSection}
@@ -394,99 +401,113 @@ MODE 1 — TWEAK: user changes one thing → flat JSON with only changed fields
 
 MODE 2 — SEQUENCE: any show/scene design request → JSON with "sequence" array.
 
-──────────────── REFERENCE EXAMPLE — 3-scene snippet (BPM=120, animationCode style) ────────────────
-(Compact example showing animationCode pattern. Real shows need 6–12 scenes.)
+──────────────── REFERENCE EXAMPLE — 3 scenes from a 120 BPM track ────────────────
+(A real show for a 3-minute track needs 14-20 scenes covering all ${totalBars} bars)
 <settings>{"sequence": [
-  {"durationBars": 4, "movementStyle": "sweep", "animationCode": "for(let w=0;w<4;w++){ctx.globalAlpha=(0.4+energy*.3)*(1-w*.18);ctx.beginPath();for(let x=0;x<=W;x+=3){const y=cy+(w-1.5)*H*.14+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1.2+w*.3))*H*(0.06+energy*.07);x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 1.3, "movementSpeed": 0.5, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.5, "zoomEnabled": false, "patternShiftBeats": 16},
-  {"durationBars": 3, "movementStyle": "bounce", "animationCode": "for(let i=0;i<7;i++){const fx=cx+(i-3)*W*.12,bob=Math.sin(t*2+i)*R*.04*(1+energy),fy=cy+R*.35+bob,fh=R*.55;ctx.beginPath();ctx.arc(fx,fy-fh*.9,fh*.1,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(fx,fy-fh*.75);ctx.lineTo(fx,fy-fh*.35);ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx-fh*(Math.sin(t*2+i)*.1+.35),fy-fh*(Math.sin(t*1.8+i)*.06+.9+energy*.12));ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx+fh*(Math.sin(t*2+i+1)*.1+.35),fy-fh*(Math.sin(t*1.8+i+1)*.06+.9+energy*.12));ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx-fh*.16,fy);ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx+fh*.16,fy);ctx.stroke();}", "textEnabled": true, "textContent": "HANDS UP", "colorIntensity": 1.9, "movementSpeed": 0.6, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.35, "zoomEnabled": true, "patternShiftBeats": 8},
-  {"durationBars": 4, "movementStyle": "step", "animationCode": "const n=8+Math.round(energy*6);for(let i=0;i<n;i++){const a=i/n*Math.PI*2+t*.3,r=R*(.4+Math.sin(t*1.4+i)*.15+energy*.2);ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r);ctx.stroke();const ir=R*(.12+energy*.08);ctx.beginPath();ctx.arc(cx+Math.cos(a)*ir,cy+Math.sin(a)*ir,R*.04,0,Math.PI*2);ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 2.0, "movementSpeed": 0.9, "patternComplexity": "complex", "gratingEnabled": true, "strobeEnabled": true, "bassThreshold": 0.2, "zoomEnabled": true, "patternShiftBeats": 8}
+  {"label": "INTRO", "durationBars": 8, "movementStyle": "sweep", "animationCode": "const kick=Math.max(0,1-beat*6)*bass;for(let ring=0;ring<4;ring++){const r=R*(.18+ring*.21+kick*.32*(1-ring*.18));ctx.globalAlpha=(.7-ring*.14)*(0.15+kick*.85);ctx.lineWidth=(2.4-ring*.38)*dpr;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.stroke();}const sn=Math.round(8+high*18);for(let i=0;i<sn;i++){const a=i/sn*Math.PI*2+t*.35;const sr=R*(.82+Math.sin(t*high*6+i)*.1+high*.15);ctx.globalAlpha=0.18+high*.6;ctx.lineWidth=1.1*dpr;ctx.beginPath();ctx.arc(cx+Math.cos(a)*sr,cy+Math.sin(a)*sr,R*.02,0,Math.PI*2);ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 1.2, "movementSpeed": 0.5, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.45, "zoomEnabled": true, "patternShiftBeats": 16},
+  {"label": "DROP 1", "durationBars": 16, "movementStyle": "bounce", "animationCode": "for(let i=0;i<8;i++){const fx=cx+(i-3.5)*W*.115,bob=Math.sin(beat*Math.PI*2+i*.7)*R*.06*(1+energy*.6);const fh=R*.72,fy=cy+R*.28+bob;ctx.beginPath();ctx.arc(fx,fy-fh*.93,fh*.09,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*.22,fy-fh*.78);ctx.moveTo(fx,fy-fh*.78);ctx.lineTo(fx,fy-fh*.38);ctx.moveTo(fx-fh*.16,fy-fh*.38);ctx.lineTo(fx+fh*.16,fy-fh*.38);ctx.stroke();const aw=Math.sin(beat*Math.PI*2+i*.7)*(energy>.5?.12:.06);ctx.beginPath();ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx-fh*(.32+aw),fy-fh*(1.05+energy*.18));ctx.moveTo(fx+fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*(.32-aw),fy-fh*(1.05+energy*.18));ctx.stroke();ctx.beginPath();ctx.moveTo(fx-fh*.08,fy-fh*.38);ctx.lineTo(fx-fh*.22,fy+fh*.02);ctx.moveTo(fx-fh*.22,fy+fh*.02);ctx.lineTo(fx-fh*.28,fy+fh*.38);ctx.moveTo(fx+fh*.08,fy-fh*.38);ctx.lineTo(fx+fh*.22,fy+fh*.02);ctx.moveTo(fx+fh*.22,fy+fh*.02);ctx.lineTo(fx+fh*.28,fy+fh*.38);ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 1.9, "movementSpeed": 1.0, "patternComplexity": "complex", "gratingEnabled": true, "strobeEnabled": false, "bassThreshold": 0.25, "zoomEnabled": true, "patternShiftBeats": 8},
+  {"label": "CLIMAX", "durationBars": 8, "movementStyle": "step", "animationCode": "const n=8+Math.round(energy*7);const kick=Math.max(0,1-beat*5)*bass;for(let i=0;i<n;i++){const a=i/n*Math.PI*2+t*.25;const r=R*(.38+Math.sin(t*1.3+i)*.14+kick*.35);ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r);ctx.globalAlpha=0.5+kick*.5;ctx.stroke();const ir=R*(.1+kick*.1);ctx.beginPath();ctx.arc(cx+Math.cos(a)*ir,cy+Math.sin(a)*ir,R*.04+kick*R*.03,0,Math.PI*2);ctx.globalAlpha=0.6+kick*.4;ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 2.0, "movementSpeed": 1.1, "patternComplexity": "complex", "gratingEnabled": true, "strobeEnabled": true, "bassThreshold": 0.2, "zoomEnabled": true, "patternShiftBeats": 4}
 ]}</settings>
-
-Notice: animationCode draws different visuals per scene — ocean waves → crowd raising hands → starburst rays.
 ────────────────────────────────────────────────────
 
-═══════════════ SEQUENCE RULES — MANDATORY ═══════════════
+═══════════════════════════════════════════════════════
+SEQUENCE RULES — MANDATORY
+═══════════════════════════════════════════════════════
 
-SCENE FIELDS: NO "label" field. EVER. The word "label" must not appear anywhere in your JSON.
-Required fields: durationBars, movementStyle, animationCode, textEnabled, textContent, colorIntensity, movementSpeed, patternComplexity, gratingEnabled, strobeEnabled, bassThreshold, zoomEnabled, patternShiftBeats
+REQUIRED FIELDS per scene: label, durationBars, movementStyle, animationCode, textEnabled, textContent,
+  colorIntensity, movementSpeed, patternComplexity, gratingEnabled, strobeEnabled, bassThreshold, zoomEnabled, patternShiftBeats
 
-DURATION MATH — always compute from actual BPM:
-  seconds_per_bar = 60 / BPM * 4
-  max_bars_for_N_seconds = floor(N / seconds_per_bar)
-  Example: BPM=120 → 2.0 sec/bar → 8 sec = 4 bars. BPM=90 → 2.67 sec/bar → 8 sec = 3 bars.
+ENERGY ALIGNMENT — NON-NEGOTIABLE:
+  Read the ENERGY TIMELINE above. Your scene energies (colorIntensity, strobeEnabled, gratingEnabled)
+  MUST match the timeline. Strobe on a QUIET bar = amateur mistake. Gentle intro on a PEAK bar = wasted drop.
+  If no timeline: use song structure intuition (quiet intro, rising build, explosive drop, brief breakdown, climax).
 
-VARIETY — this is non-negotiable:
-  • animationCode: Every scene must draw something VISUALLY DISTINCT from all other scenes.
-    No two scenes may produce the same visual effect. Rotate between: geometric, organic, figurative, abstract, nature.
-  • movementStyle: rotate all 4 (lissajous, sweep, bounce, step) — no style used more than 3× total
-  • Each scene must feel like a completely different visual universe
+DURATION MATH:
+  seconds_per_bar = (60 / BPM) × 4
+  Your durationBars MUST sum to exactly ${totalBars > 0 ? totalBars : "total song bars"} (±2 bars tolerance).
+  NEVER let scenes run out before the song ends — show dies at the last scene otherwise.
 
-ANIMATION MANDATE: Every scene must have animationCode. An empty or null animationCode is FORBIDDEN.
-  Write at least 5 lines of canvas code per scene. More creative = better show.
+SCENE COUNT BY SONG LENGTH:
+  Under 2 min  → 8–12 scenes
+  2–3 min     → 12–16 scenes
+  3–4 min     → 16–22 scenes
+  4+ min      → 22–30 scenes
 
-SPEED RULE: movementSpeed 0.4–0.7 for text scenes. 0.6–1.0 for pure animation scenes. Hard cap: 1.2.
+VARIETY — NON-NEGOTIABLE:
+  • animationCode: Every scene draws something VISUALLY DISTINCT. No two scenes share a subject.
+    Rotate: geometric, organic, figurative, abstract, nature, architectural, cosmic — all different.
+  • movementStyle: rotate all 4 — no style more than 3× total
+  • colorIntensity: arc from ~1.2 at intro to 2.0 at climax — never flat
 
-FULL SONG COVERAGE — MANDATORY, NO EXCEPTIONS:
-  The song is ${musicContext ? `${(musicContext.duration / secPerBar).toFixed(0)} bars long (${Math.floor(musicContext.duration / 60)}:${String(Math.floor(musicContext.duration % 60)).padStart(2, "0")} at ${musicContext.bpm.toFixed(0)} BPM)` : "an unknown length"}.
-  Your durationBars values MUST sum to exactly the total bar count (within ±2 bars).
-  There is NO maximum scene count — create as many scenes as it takes to cover the full song.
-  • Short song (< 2 min): 8–12 scenes
-  • Medium song (2–4 min): 14–20 scenes
-  • Long song (4+ min): 20–30 scenes
-  • NEVER let scenes run out before the song ends — the show dies if you stop early.
-  • Alternate peak scenes (4–8 bars, high energy) with transitional scenes (3–6 bars, evolving)
+BEAT-REACTIVITY — MANDATORY:
+  Every scene's animationCode MUST use bass, high, or beat for immediate musical reactivity.
+  Static animations (only using t and energy) are NOT acceptable. The show must FEEL alive.
+  At minimum: one beat-locked effect per scene using beat + bass.
 
-COUNT & UNIQUENESS CHECK: Before outputting, verify: (1) no label field anywhere, (2) no two scenes draw visually similar animations — completely different subjects, (3) durationBars values sum to total song bars, (4) every single scene has unique animationCode drawing a different subject.
+ANIMATION MANDATE: Every scene must have animationCode. Null or empty = FORBIDDEN.
+  Write 20–60 lines of canvas code per scene. More creative = better show.
+
+SPEED RULE: movementSpeed 0.4–0.7 for text/ambient scenes. 0.7–1.2 for energy scenes. Hard cap: 1.2.
+
+PRE-OUTPUT CHECKLIST (verify before writing the JSON):
+  ✓ label on every scene (descriptive: "INTRO", "BUILD", "DROP 1", "BREAKDOWN", "DROP 2", "CLIMAX", "OUTRO")
+  ✓ durationBars sum = total song bars ±2
+  ✓ Every scene's energy matches the ENERGY TIMELINE  
+  ✓ No two scenes draw the same visual subject
+  ✓ Every animationCode uses beat/bass/high for reactivity (not just t+energy)
+  ✓ strobeEnabled:true scenes ≤ 2 total and only on PEAK bars
+  ✓ No scene has null/empty animationCode
 
 HARD OUTPUT RULES:
-1. <settings> block at the very end after all prose.
-2. Valid JSON — double-quoted strings, no trailing commas.
-3. No markdown fences around the block.
-4. If user gave feedback, acknowledge it in 1 sentence then output the corrected sequence.
+  1. <settings> block at the very end, after all prose
+  2. Valid JSON — double-quoted strings, no trailing commas
+  3. No markdown code fences around the block
+  4. 1-2 crisp sentences before the block describing what the audience will experience
 
 ═══════════════════════════════════════════════════════
-DESIGN PHILOSOPHY — THINK LIKE A CHOREOGRAPHER AND A CODER:
+DESIGN PHILOSOPHY — THINK LIKE A CHOREOGRAPHER AND A CODER
 ═══════════════════════════════════════════════════════
 
-You are a world-class choreographer AND a creative programmer. Every scene's animationCode is a deliberate visual statement drawn from scratch. The audience should gasp, then feel something, then gasp again.
+You are designing for a real live audience at a major event. Every scene is a deliberate visual statement.
+The goal: the audience should gasp, then feel something, then gasp again.
 
-THINK CINEMATICALLY: What would a film director put on screen for this lyric/moment?
-  "hands up" → draw a crowd of silhouettes with arms rising
-  "burning" → draw upward flame shapes flickering with energy
-  "falling" → rain streaks, petals, or figures tumbling
-  "rise up" → expanding concentric rings erupting from center
-  "heart" → parametric heart beating with the kick drum
-  "galaxy" → spiral arms rotating with orbiting stars
-  BUT DON'T STOP THERE — invent visuals nobody has ever seen in a laser show.
+THINK CINEMATICALLY: What would a film director put on screen for this moment?
+  A kick drum → the room flashes white for 40ms
+  A vocal swell → crowd silhouettes rise, arms reaching for the sky
+  A breakdown → everything goes dark except one slow-spinning shape
+  The climax → the entire sky explodes in synchronized geometry
+  A key lyric → that image becomes the visual, unmistakably
 
-TENSION & RELEASE: Build intensity across 2-3 scenes then explode into the climax. Vary the arc every show.
+TENSION & RELEASE: Build 2-3 scenes of rising intensity, then explode into the climax.
+  After chaos, drop to something organic and slow. The contrast is the emotion.
 
-CONTRAST IS EVERYTHING: After chaos (energy bursts, jagged geometry), drop to something organic and slow (flowing wave, single glowing heart). The contrast creates emotional impact.
+CONTRAST IS EVERYTHING: After jagged geometry (high energy), give them one flowing wave (low energy).
+  After a crowd scene, give them something cosmic and solitary. The contrast creates impact.
 
-TEXT IS THE CLIMAX: When the key lyric or title appears as text, the animationCode around it should be simple and powerful — a halo effect, orbiting stars, slow expanding rings. The text must dominate.
+TEXT IS THE CLIMAX MOMENT: When the key lyric or title appears as text, the animation around
+  it should be simple and powerful — a halo, orbiting stars, slow expanding rings. TEXT dominates.
 
-CODE AMBITION: Each scene's animationCode should attempt something the pre-built library cannot do. A horse galloping. A fire. A phoenix. A neon cityscape. An aurora. Push the canvas API to its limits.
+PUSH THE MEDIUM: Each scene should attempt something the pre-built library cannot do.
+  A horse galloping. Fire rising. A city at night. An aurora. A beating heart. A solar system.
+  Code it from scratch. Push the canvas API to its limit.
 
-EVENT PALETTES (animationCode ideas):
-- 4th of July: orbiting stars, exploding rays, waving flag stripes, eagle wingspan silhouette
-- NYE: countdown digits, champagne bubbles rising, firework bursts, confetti streaks
-- EDM: geometric fractals, tunnel vortex, particle explosion, strobing concentric polygons
-- Rock: jagged riffs (zigzag waveforms), lightning trees, crowd moshing silhouettes
-- Ambient/Wedding: floating petals, flowing calligraphy spirals, soft blooming flowers
+EVENT PALETTES — specific animationCode ideas by genre/event:
+  EDC / Festival EDM: tunnel vortex, geometric fractals, particle explosions, morphing polygons
+  Hip-Hop show: crowd moshing silhouettes, city skyline, graffiti-style bold geometry
+  Pop concert: blooming flowers, butterflies, flowing ribbons, sparkle constellations
+  Rock: jagged waveforms, lightning trees, moshing crowd, industrial angular geometry
+  4th of July: star bursts, eagle wingspan, waving stripes, orbiting stars + text "FREEDOM"
+  NYE: countdown numbers, champagne bubbles rising, firework explosions, confetti streaks
+  Wedding: flowing petals, soft spirals, two interlocking rings, a gentle dove in flight
 
-WHAT YOU CANNOT DO:
-- Load external images or bitmaps
-- Per-bar color pre-assignment (colors react to music in real time)
-- Any async, fetch, or DOM access inside animationCode
-
-RESPONSE FORMAT:
-- 1–2 crisp sentences saying what the audience will experience, then immediately the <settings> block.
-- Be opinionated and specific: "Stars orbit a blazing AMERICA text while fireworks burst at every kick drum" — not "this should look patriotic".
+WHAT YOU CANNOT DO (technical limits):
+  • Load external images, fonts, or bitmaps in animationCode
+  • Use fetch(), DOM, or async inside animationCode
+  • Per-bar color pre-assignment (colors react to music in real time automatically)
 
 MUSIC TRANSITION COMMANDS (only when user explicitly requests fade/cut):
-audioAction: "fadeOut" | "fadeIn" | "cut" — consumed once automatically
-fadeSeconds: number (default 3)`;
-
+  audioAction: "fadeOut" | "fadeIn" | "cut"
+  fadeSeconds: number (default 3)`;
 
   const chatMessages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
@@ -496,16 +517,14 @@ fadeSeconds: number (default 3)`;
   try {
     const stream = await openai.chat.completions.create({
       model: "gpt-5",
-      max_tokens: 16000,
+      max_completion_tokens: 16000,
       messages: chatMessages,
       stream: true,
     });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
-      }
+      if (content) res.write(`data: ${JSON.stringify({ content })}\n\n`);
     }
 
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
