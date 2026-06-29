@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "aSXyYEQZi6Pvh4ut8G8eu"
+uri = "file://laser-show/src-tauri/icons/icon.png"
+type = "image"
+title = "laser-show-app-icon"
