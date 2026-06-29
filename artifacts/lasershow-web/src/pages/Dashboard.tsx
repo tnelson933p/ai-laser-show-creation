@@ -8,7 +8,7 @@ import {
   LASER_BRANDS, LASER_DATABASE, getLaserByBrandModel,
   type LaserModel,
 } from "@/lib/laser-database";
-import { ShowEngine, LISSAJOUS_PRESETS, type VisualState } from "@/lib/show-engine";
+import { ShowEngine, LISSAJOUS_PRESETS, type VisualState, type ShowOverrides } from "@/lib/show-engine";
 import {
   Play, Square, Upload, Usb, Activity, Zap, Music, ChevronDown, ChevronUp, Cpu,
 } from "lucide-react";
@@ -52,6 +52,10 @@ export default function Dashboard() {
   // Show engine
   const engineRef = useRef<ShowEngine | null>(null);
   const visualStateRef = useRef<VisualState | null>(null);
+  const [showOverrides, setShowOverrides] = useState<ShowOverrides>({});
+  const showOverridesRef = useRef<ShowOverrides>({});
+  // Keep a ref in sync so the dmx loop reads the latest value without stale closure
+  useEffect(() => { showOverridesRef.current = showOverrides; }, [showOverrides]);
 
   // Audio refs
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -74,6 +78,7 @@ export default function Dashboard() {
     if (found) {
       engineRef.current = new ShowEngine(found);
     }
+    setShowOverrides({});
   }, [selectedBrand, selectedModel]);
 
   // Brand change → pick first model
@@ -184,7 +189,7 @@ export default function Dashboard() {
 
     setCurrentEnvelopes({ bass, mid, high });
 
-    const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: elapsed });
+    const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: elapsed }, showOverridesRef.current);
     setDmxOutput(result.channels);
     visualStateRef.current = result.visualState;
 
@@ -317,8 +322,12 @@ export default function Dashboard() {
                     </span>
                   </div>
 
-                  {/* AI strategy notes */}
-                  <AIAnalysisPanel laser={laser} />
+                  {/* AI Show Director chat */}
+                  <ShowChat
+                    laser={laser}
+                    overrides={showOverrides}
+                    onOverridesChange={setShowOverrides}
+                  />
 
                   {/* DMX connect */}
                   {webSerialSupported && (
@@ -513,36 +522,89 @@ export default function Dashboard() {
 // ─────────────────────────────────────────────────────────────────────────────
 // AI Analysis Panel
 // ─────────────────────────────────────────────────────────────────────────────
-function AIAnalysisPanel({ laser }: { laser: LaserModel }) {
-  const [aiText, setAiText] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  displayContent: string;
+  settingsApplied?: Partial<ShowOverrides>;
+}
 
-  // Reset AI text when laser changes
-  useEffect(() => { setAiText(""); setExpanded(false); }, [laser.id]);
+function parseSettingsBlock(text: string): { display: string; settings: ShowOverrides | null } {
+  const match = text.match(/<settings>([\s\S]*?)<\/settings>/);
+  if (!match) return { display: text, settings: null };
+  try {
+    const settings = JSON.parse(match[1]) as ShowOverrides;
+    return { display: text.replace(/<settings>[\s\S]*?<\/settings>/, "").trim(), settings };
+  } catch {
+    return { display: text.replace(/<settings>[\s\S]*?<\/settings>/, "").trim(), settings: null };
+  }
+}
 
-  const runAnalysis = async () => {
-    setLoading(true);
-    setAiText("");
-    setExpanded(true);
+function ShowChat({
+  laser,
+  overrides,
+  onOverridesChange,
+}: {
+  laser: LaserModel;
+  overrides: ShowOverrides;
+  onOverridesChange: (o: ShowOverrides) => void;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setMessages([]); }, [laser.id]);
+
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    }, 50);
+  };
+
+  const send = async () => {
+    if (!input.trim() || streaming) return;
+    const userText = input.trim();
+    setInput("");
+
+    const userMsg: ChatMessage = { role: "user", content: userText, displayContent: userText };
+    const updatedMsgs = [...messages, userMsg];
+    setMessages(updatedMsgs);
+    setStreaming(true);
+
+    const placeholderIdx = updatedMsgs.length;
+    setMessages(prev => [...prev, { role: "assistant", content: "", displayContent: "" }]);
+    scrollToBottom();
+
+    let accumulated = "";
+
     try {
-      const resp = await fetch("/api/laser/analyze", {
+      const resp = await fetch("/api/laser/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          brand: laser.brand,
-          model: laser.model,
-          channelCount: laser.channelCount,
-          colorMode: laser.colorMode,
-          scanTier: laser.scanTier,
-          features: laser.specialFeatures,
-          availableColors: laser.availableColors,
+          laser: {
+            brand: laser.brand,
+            model: laser.model,
+            channelCount: laser.channelCount,
+            colorMode: laser.colorMode,
+            scanTier: laser.scanTier,
+            availableColors: laser.availableColors,
+            specialFeatures: laser.specialFeatures,
+          },
+          messages: updatedMsgs.map(m => ({ role: m.role, content: m.content })),
+          currentSettings: overrides,
         }),
       });
-      if (!resp.ok || !resp.body) { setAiText("Analysis unavailable."); return; }
+
+      if (!resp.ok || !resp.body) throw new Error("no body");
+
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -552,52 +614,122 @@ function AIAnalysisPanel({ laser }: { laser: LaserModel }) {
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           try {
-            const data = JSON.parse(line.slice(6));
-            if (data.content) setAiText(t => t + data.content);
-            if (data.done || data.error) break;
-          } catch { /* skip malformed */ }
+            const data = JSON.parse(line.slice(6)) as { content?: string; done?: boolean; error?: string };
+            if (data.content) {
+              accumulated += data.content;
+              const { display } = parseSettingsBlock(accumulated);
+              setMessages(prev => {
+                const next = [...prev];
+                next[placeholderIdx] = { role: "assistant", content: accumulated, displayContent: display };
+                return next;
+              });
+              scrollToBottom();
+            }
+          } catch { /* skip */ }
         }
       }
+
+      // Final pass — parse and apply settings
+      const { display, settings } = parseSettingsBlock(accumulated);
+      if (settings) {
+        const merged = { ...overrides, ...settings };
+        onOverridesChange(merged);
+        setMessages(prev => {
+          const next = [...prev];
+          next[placeholderIdx] = { role: "assistant", content: accumulated, displayContent: display, settingsApplied: settings };
+          return next;
+        });
+      }
     } catch {
-      setAiText("Could not connect to AI analysis service.");
+      setMessages(prev => {
+        const next = [...prev];
+        next[placeholderIdx] = { role: "assistant", content: "Connection error.", displayContent: "Connection error." };
+        return next;
+      });
     } finally {
-      setLoading(false);
+      setStreaming(false);
+      scrollToBottom();
     }
   };
 
+  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  const activeCount = Object.keys(overrides).length;
+
   return (
-    <div className="bg-black/60 border border-zinc-800/60 rounded-sm p-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-[10px] text-[#00ff9d] uppercase tracking-widest font-bold">
-          <Cpu className="w-3 h-3" /> AI Show Strategy
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={runAnalysis}
-          disabled={loading}
-          className="h-6 text-[10px] px-2 border-zinc-700 text-zinc-400 hover:text-[#00ff9d] hover:border-[#00ff9d]/40 rounded-sm"
-        >
-          {loading ? "Analyzing…" : "Deep Analysis ✦"}
-        </Button>
+    <div className="bg-black/60 border border-zinc-800/60 rounded-sm flex flex-col" style={{ minHeight: 220 }}>
+      {/* Header */}
+      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-zinc-800/60 flex-shrink-0">
+        <Cpu className="w-3 h-3 text-[#00ff9d]" />
+        <span className="text-[10px] text-[#00ff9d] uppercase tracking-widest font-bold">AI Show Director</span>
+        {activeCount > 0 && (
+          <span className="ml-auto text-[9px] text-[#00ff9d]/50 border border-[#00ff9d]/20 rounded px-1.5 py-0.5">
+            {activeCount} override{activeCount > 1 ? "s" : ""} active
+          </span>
+        )}
+        {activeCount > 0 && (
+          <button
+            onClick={() => onOverridesChange({})}
+            className="text-[9px] text-zinc-600 hover:text-zinc-400 transition-colors ml-1"
+            title="Reset all AI overrides"
+          >
+            reset
+          </button>
+        )}
       </div>
 
-      {/* Built-in notes (always visible) */}
-      <p className="text-[11px] leading-relaxed text-zinc-400">
-        {laser.strategy.notes}
-      </p>
-
-      {/* AI streaming response */}
-      {expanded && (
-        <div className="border-t border-zinc-800 pt-2 space-y-1">
-          <div className="text-[10px] text-zinc-600 uppercase tracking-wider">GPT Expert Analysis</div>
-          <div className="text-[11px] leading-relaxed text-zinc-300 whitespace-pre-wrap max-h-48 overflow-y-auto">
-            {loading && !aiText ? (
-              <span className="text-zinc-600 animate-pulse">Generating laser-specific insights…</span>
-            ) : aiText}
+      {/* Message list */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-2 space-y-2" style={{ minHeight: 120, maxHeight: 240 }}>
+        {messages.length === 0 && (
+          <p className="text-[11px] leading-relaxed text-zinc-600 italic px-1 pt-1">
+            {laser.strategy.notes}
+            <br /><br />
+            <span className="not-italic text-zinc-700">Try: "make the bass more aggressive" · "kill the strobe" · "slow it down and make it hypnotic" · "keep it simple"</span>
+          </p>
+        )}
+        {messages.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div className={cn(
+              "max-w-[88%] rounded px-2.5 py-1.5 text-[11px] leading-relaxed",
+              msg.role === "user"
+                ? "bg-zinc-800 text-zinc-200"
+                : "bg-zinc-900/80 border border-zinc-800 text-zinc-300"
+            )}>
+              {msg.displayContent
+                ? msg.displayContent
+                : <span className="text-zinc-600 animate-pulse">thinking…</span>
+              }
+              {msg.settingsApplied && Object.keys(msg.settingsApplied).length > 0 && (
+                <div className="mt-1.5 pt-1.5 border-t border-zinc-800 text-[9px] text-[#00ff9d]/60">
+                  ✓ Updated: {Object.keys(msg.settingsApplied).join(", ")}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
+
+      {/* Input row */}
+      <div className="flex gap-1.5 px-2 pb-2 pt-1 flex-shrink-0 border-t border-zinc-900">
+        <input
+          type="text"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder={streaming ? "waiting for response…" : "Tell the AI what to change or keep…"}
+          disabled={streaming}
+          className="flex-1 bg-zinc-900 border border-zinc-800 rounded-sm px-2 py-1.5 text-[11px] text-zinc-200 placeholder:text-zinc-700 focus:outline-none focus:border-[#00ff9d]/30 disabled:opacity-40 transition-colors"
+        />
+        <button
+          onClick={send}
+          disabled={!input.trim() || streaming}
+          className="px-2.5 py-1.5 text-[11px] border border-zinc-700 rounded-sm text-zinc-500 hover:text-[#00ff9d] hover:border-[#00ff9d]/40 disabled:opacity-25 transition-colors"
+        >
+          {streaming ? "…" : "↵"}
+        </button>
+      </div>
     </div>
   );
 }

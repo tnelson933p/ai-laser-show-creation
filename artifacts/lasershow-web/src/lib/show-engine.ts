@@ -61,6 +61,26 @@ const MID_PATTERN_POOL    = [0, 1, 2, 3, 4, 5, 8, 9, 10];
 const PRO_PATTERN_POOL    = LISSAJOUS_PRESETS.map((_, i) => i);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Runtime overrides — set by the AI chat to modify show behaviour live
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ShowOverrides {
+  patternShiftBeats?: number;
+  bassThreshold?: number;
+  strobeEnabled?: boolean;
+  zoomEnabled?: boolean;
+  movementStyle?: "lissajous" | "sweep" | "bounce" | "step";
+  colorIntensity?: number;   // 0.5–2.0 multiplier on RGB
+  movementSpeed?: number;    // 0.5–3.0 phase multiplier
+  gratingEnabled?: boolean;
+  patternComplexity?: "simple" | "medium" | "complex";
+}
+
+const SIMPLE_PATTERN_POOL  = [0, 1, 2, 8];
+const MEDIUM_PATTERN_POOL  = [0, 1, 2, 3, 4, 5, 8, 9, 10];
+const COMPLEX_PATTERN_POOL = LISSAJOUS_PRESETS.map((_, i) => i);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Stateful show engine
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -88,39 +108,53 @@ export class ShowEngine {
 
   /**
    * Compute one DMX frame from the current audio state.
-   * Called every 25ms (40Hz).
+   * Called every 25ms (40Hz). Overrides from the AI chat director take priority
+   * over the laser's built-in strategy where they overlap.
    */
-  compute(frame: AudioFrame): ShowFrame {
+  compute(frame: AudioFrame, overrides: ShowOverrides = {}): ShowFrame {
     const { bass, mid, high, bpm, timeS } = frame;
     const strategy = this.laser.strategy;
+
+    // Resolve effective settings (AI overrides win over strategy defaults)
+    const shiftBeats        = overrides.patternShiftBeats ?? strategy.patternShiftBeats;
+    const bassThreshold     = overrides.bassThreshold     ?? strategy.bassThreshold;
+    const zoomOnBass        = overrides.zoomEnabled       ?? strategy.zoomOnBass;
+    const strobeOnHigh      = overrides.strobeEnabled     ?? strategy.strobeOnHigh;
+    const movementStyle     = overrides.movementStyle     ?? strategy.movementStyle;
+    const colorIntensity    = overrides.colorIntensity    ?? 1.0;
+    const speedMul          = overrides.movementSpeed     ?? 1.0;
+    const gratingAllowed    = overrides.gratingEnabled    ?? true;
+
+    // Effective pattern pool (complexity override or laser-native)
+    let pool = this.patternPool;
+    if (overrides.patternComplexity === "simple")  pool = SIMPLE_PATTERN_POOL;
+    if (overrides.patternComplexity === "medium")  pool = MEDIUM_PATTERN_POOL;
+    if (overrides.patternComplexity === "complex") pool = COMPLEX_PATTERN_POOL;
 
     // ── Phase / beat tracking ─────────────────────────────────────────────
     const beatDuration = 60 / bpm;
     const beatsPerTick = (1 / 40) / beatDuration;
-    this.phaseAccumulator += beatsPerTick * Math.PI * 2;
+    this.phaseAccumulator += beatsPerTick * Math.PI * 2 * speedMul;
     const absoluteBeat = Math.floor(timeS / beatDuration);
     const beatPhase = (timeS % beatDuration) / beatDuration; // 0–1 within beat
-    const phraseLength = 8; // 8-beat phrase
+    const phraseLength = 8;
     const phraseIndex = Math.floor(absoluteBeat / phraseLength);
 
     // ── Energy tracking ───────────────────────────────────────────────────
     const energy = (bass * 0.5 + mid * 0.3 + high * 0.2);
     this.energyHistory.push(energy);
-    if (this.energyHistory.length > 160) this.energyHistory.shift(); // 4 seconds
+    if (this.energyHistory.length > 160) this.energyHistory.shift();
     const avgEnergy = this.energyHistory.reduce((a, b) => a + b, 0) / this.energyHistory.length;
-    const energyRatio = avgEnergy > 0 ? Math.min(2, energy / avgEnergy) : 1;
 
     // ── Pattern stepping ──────────────────────────────────────────────────
-    const shiftBeats = strategy.patternShiftBeats;
     if (absoluteBeat > 0 && absoluteBeat % shiftBeats === 0 && absoluteBeat !== this.lastPatternShiftBeat) {
       this.lastPatternShiftBeat = absoluteBeat;
-      this.currentPatternIdx = (this.currentPatternIdx + 1) % this.patternPool.length;
-      // On energy spike, skip an extra pattern for surprise
+      this.currentPatternIdx = (this.currentPatternIdx + 1) % pool.length;
       if (energy > 0.8 && Math.random() > 0.5) {
-        this.currentPatternIdx = (this.currentPatternIdx + 1) % this.patternPool.length;
+        this.currentPatternIdx = (this.currentPatternIdx + 1) % pool.length;
       }
     }
-    const patternIndex = this.patternPool[this.currentPatternIdx];
+    const patternIndex = pool[this.currentPatternIdx % pool.length];
 
     // ── Animation bank shift (every 4 phrases) ────────────────────────────
     if (phraseIndex > 0 && phraseIndex % 4 === 0 && phraseIndex !== this.lastBankShiftPhrase) {
@@ -132,23 +166,18 @@ export class ShowEngine {
     let xNorm: number;
     let yNorm: number;
 
-    if (strategy.movementStyle === "lissajous") {
-      // BPM-phase Lissajous movement
+    if (movementStyle === "lissajous") {
       const [a, b, delta] = LISSAJOUS_PRESETS[patternIndex % LISSAJOUS_PRESETS.length];
       const t = this.phaseAccumulator;
       xNorm = (Math.sin(a * t + delta) * 0.5 + 0.5);
       yNorm = (Math.sin(b * t) * 0.5 + 0.5);
-    } else if (strategy.movementStyle === "sweep") {
-      // Pendulum sweep
+    } else if (movementStyle === "sweep") {
       xNorm = (Math.sin(this.phaseAccumulator) * 0.5 + 0.5);
       yNorm = (Math.sin(this.phaseAccumulator * 0.7 + Math.PI / 4) * 0.5 + 0.5);
-    } else if (strategy.movementStyle === "bounce") {
-      // Hard bounce with easing
-      const t = beatPhase;
+    } else if (movementStyle === "bounce") {
       xNorm = Math.abs(Math.sin(this.phaseAccumulator * 1.3));
       yNorm = Math.abs(Math.sin(this.phaseAccumulator * 0.9 + 1));
     } else {
-      // step: position changes on beat
       xNorm = beatPhase < 0.5 ? 0.3 : 0.7;
       yNorm = (absoluteBeat % 4) / 3;
     }
@@ -158,11 +187,11 @@ export class ShowEngine {
 
     // ── Zoom with bass snap + exponential decay ───────────────────────────
     let zoomNorm: number;
-    if (strategy.zoomOnBass && bass > strategy.bassThreshold) {
-      this.zoomDecay = 1.0; // snap to max
+    if (zoomOnBass && bass > bassThreshold) {
+      this.zoomDecay = 1.0;
     }
-    this.zoomDecay *= 0.94; // decay ~6% per frame (smooth fall)
-    zoomNorm = 0.39 + this.zoomDecay * 0.61; // range 0.39–1.0 (maps to 100–255)
+    this.zoomDecay *= 0.94;
+    zoomNorm = 0.39 + this.zoomDecay * 0.61;
 
     // ── Color ─────────────────────────────────────────────────────────────
     let red = 0, green = 0, blue = 0;
@@ -214,11 +243,16 @@ export class ShowEngine {
       red = energy; green = energy * 0.5; blue = energy * 0.8;
     }
 
+    // ── Color intensity multiplier (AI override) ──────────────────────────
+    red   = Math.min(1, red   * colorIntensity);
+    green = Math.min(1, green * colorIntensity);
+    blue  = Math.min(1, blue  * colorIntensity);
+
     // ── Strobe ────────────────────────────────────────────────────────────
-    const strobe = strategy.strobeOnHigh && high > 0.75 && energy > 0.65;
+    const strobe = strobeOnHigh && high > 0.75 && energy > 0.65;
 
     // ── Grating ───────────────────────────────────────────────────────────
-    const gratingActive = energy > 0.65 && energy > avgEnergy * 1.1;
+    const gratingActive = gratingAllowed && energy > 0.65 && energy > avgEnergy * 1.1;
 
     // ── Build DMX channels ────────────────────────────────────────────────
     const channels = new Array(this.laser.channelCount).fill(0);

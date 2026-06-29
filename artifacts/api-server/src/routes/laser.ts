@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { openai } from "@workspace/integrations-openai-ai-server";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 const router = Router();
 
@@ -81,6 +82,103 @@ Keep the response focused, expert-level, and under 300 words. Use specific numbe
   } catch (err) {
     req.log.error({ err }, "Laser analysis failed");
     res.write(`data: ${JSON.stringify({ error: "Analysis failed" })}\n\n`);
+    res.end();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/laser/chat
+// Multi-turn conversational AI show director.
+// Body: { laser, messages: [{role,content}][], currentSettings }
+// Streams SSE. AI may embed <settings>{...}</settings> to update show params.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/api/laser/chat", async (req, res) => {
+  const { laser, messages, currentSettings } = req.body as {
+    laser: {
+      brand: string; model: string; channelCount: number;
+      colorMode: string; scanTier: string;
+      availableColors: string[]; specialFeatures: string[];
+    };
+    messages: Array<{ role: "user" | "assistant"; content: string }>;
+    currentSettings: Record<string, unknown>;
+  };
+
+  if (!laser || !messages?.length) {
+    res.status(400).json({ error: "laser and messages are required" });
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const settingsDoc = `
+ADJUSTABLE SHOW PARAMETERS (you can change these by emitting a <settings> block):
+- patternShiftBeats: number — how many beats between pattern changes (4, 8, 16, 32)
+- bassThreshold: number 0.0–1.0 — minimum bass level to trigger zoom snap (lower = more responsive)
+- strobeEnabled: boolean — whether strobe fires on high-frequency peaks
+- zoomEnabled: boolean — whether bass drives zoom snaps
+- movementStyle: "lissajous" | "sweep" | "bounce" | "step" — how X/Y moves
+- colorIntensity: number 0.5–2.0 — multiplier on RGB saturation
+- movementSpeed: number 0.5–3.0 — phase accumulation speed multiplier (1=normal, 2=double speed)
+- gratingEnabled: boolean — whether grating/fan effects fire on energy peaks
+- patternComplexity: "simple" | "medium" | "complex" — limits which Lissajous ratios are used
+
+Current show settings: ${JSON.stringify(currentSettings, null, 2)}`;
+
+  const systemPrompt = `You are an expert laser show programmer and show director with 20+ years of professional experience. You are working interactively with the user to design and refine a music-synchronized laser show for a specific fixture.
+
+Laser fixture: ${laser.brand} ${laser.model}
+DMX channels: ${laser.channelCount} | Color: ${laser.colorMode} | Scanner: ${laser.scanTier}
+Colors available: ${laser.availableColors.join(", ")}
+Features: ${laser.specialFeatures.join(", ") || "standard"}
+
+${settingsDoc}
+
+YOUR ROLE:
+- Have a natural, expert back-and-forth conversation about the show
+- When the user asks you to change something, DO it — emit a <settings> JSON block at the very end of your reply
+- When the user says they like something, acknowledge it and keep those settings
+- Be concise: 1-3 sentences of natural language, then the <settings> block if needed
+- Reference specific DMX values, Lissajous ratios, KPPS limits, and timing when relevant
+- Always explain what you changed and why
+
+SETTINGS BLOCK FORMAT (only include keys you want to change):
+<settings>{"key": value, "key2": value2}</settings>
+
+Examples of valid user requests:
+"Make the bass more aggressive" → lower bassThreshold, set zoomEnabled true
+"I hate the strobe" → set strobeEnabled false
+"Move faster" → increase movementSpeed
+"The colors are too dim" → increase colorIntensity
+"Keep it simple" → set patternComplexity "simple", movementStyle "sweep"
+"Make it hypnotic and slow" → set movementSpeed 0.6, movementStyle "lissajous", patternShiftBeats 32`;
+
+  const chatMessages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...messages.map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+  ];
+
+  try {
+    const stream = await openai.chat.completions.create({
+      model: "gpt-5-mini",
+      max_completion_tokens: 400,
+      messages: chatMessages,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      }
+    }
+
+    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+    res.end();
+  } catch (err) {
+    req.log.error({ err }, "Laser chat failed");
+    res.write(`data: ${JSON.stringify({ error: "Chat unavailable" })}\n\n`);
     res.end();
   }
 });
