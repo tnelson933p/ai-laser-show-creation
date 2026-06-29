@@ -570,7 +570,8 @@ export default function Dashboard() {
     const frameIndex = Math.min(Math.floor(clamped * 40), track.analysis.bass.length - 1);
     setCurrentFrame(frameIndex);
 
-    // Compute the show engine output at this exact frame so the preview updates immediately
+    // Update DMX output for the seeked position but do NOT light up the canvas —
+    // the canvas only shows during active playback (visualStateRef stays null).
     if (engineRef.current) {
       const bass = track.analysis.bass[frameIndex] || 0;
       const mid  = track.analysis.mid[frameIndex]  || 0;
@@ -580,7 +581,7 @@ export default function Dashboard() {
         { bass, mid, high, bpm, timeS: clamped },
         showOverridesRef.current,
       );
-      visualStateRef.current = result.visualState;
+      // Only push DMX channels — never set visualStateRef here so the canvas stays dark
       setDmxOutput(result.channels);
       setCurrentEnvelopes({ bass, mid, high });
     }
@@ -1616,66 +1617,57 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
         return;
       }
 
-      // Pattern position — large offset so movement style is unmistakably visible
-      // xNorm/yNorm range 0–1, centered at 0.5, 35% canvas offset at extremes
-      const patternX = cx + (vs.xNorm - 0.5) * W * 0.35;
-      const patternY = cy + (vs.yNorm - 0.5) * H * 0.35;
-
-      // Base radius, boosted by zoom
-      const baseR = Math.min(W, H) * (0.28 + vs.zoom * 0.16);
-
       const r255 = Math.round(vs.red   * 255);
       const g255 = Math.round(vs.green * 255);
       const b255 = Math.round(vs.blue  * 255);
       const color = `rgb(${r255},${g255},${b255})`;
 
-      // ── Fog / atmosphere glow ─────────────────────────────────────
-      // Scales with energy — dramatic at high energy levels
-      const fogGlowR = Math.min(W, H) * (0.3 + vs.energy * 0.5);
-      const fogGrad = ctx.createRadialGradient(patternX, patternY, 0, patternX, patternY, fogGlowR);
-      fogGrad.addColorStop(0, `rgba(${r255},${g255},${b255},${(0.04 + vs.energy * 0.08).toFixed(3)})`);
-      fogGrad.addColorStop(0.5, `rgba(${r255},${g255},${b255},${(0.01 + vs.energy * 0.03).toFixed(3)})`);
-      fogGrad.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = fogGrad;
-      ctx.fillRect(0, 0, W, H);
-
-      // ── Primary Lissajous beam ────────────────────────────────────
-      // When an animation overlay is active, the animation IS the show.
-      // The beam becomes subtle atmosphere — a faint halo, not a foreground trace.
-      // When text is showing, the beam disappears entirely so nothing competes.
+      // Decide scene mode up front — drives everything below
       const hasAnimation = vs.animationStyle !== "none";
       const hasText      = vs.textEnabled && !!vs.textContent;
+      // Pure Lissajous scenes: no animation, no text — beam is the show
+      const isBeamScene  = !hasAnimation && !hasText;
 
-      const [a, b, delta] = LISSAJOUS_PRESETS[vs.patternIndex % LISSAJOUS_PRESETS.length];
+      // ── Beam-scene only: fog glow + Lissajous + grating ──────────
+      // NONE of this draws during animation or text scenes — those run on a
+      // clean dark canvas so nothing "bounces in the background."
+      if (isBeamScene) {
+        const patternX = cx + (vs.xNorm - 0.5) * W * 0.35;
+        const patternY = cy + (vs.yNorm - 0.5) * H * 0.35;
+        const baseR    = Math.min(W, H) * (0.28 + vs.zoom * 0.16);
+        const [a, b, delta] = LISSAJOUS_PRESETS[vs.patternIndex % LISSAJOUS_PRESETS.length];
 
-      // Beam is hidden during text; faint atmosphere during animations; full during pure Lissajous scenes
-      const beamAlpha = hasAnimation ? 0.18 : 1.0;
+        // Fog / atmosphere glow — follows the Lissajous position
+        const fogGlowR = Math.min(W, H) * (0.3 + vs.energy * 0.5);
+        const fogGrad = ctx.createRadialGradient(patternX, patternY, 0, patternX, patternY, fogGlowR);
+        fogGrad.addColorStop(0, `rgba(${r255},${g255},${b255},${(0.04 + vs.energy * 0.08).toFixed(3)})`);
+        fogGrad.addColorStop(0.5, `rgba(${r255},${g255},${b255},${(0.01 + vs.energy * 0.03).toFixed(3)})`);
+        fogGrad.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = fogGrad;
+        ctx.fillRect(0, 0, W, H);
 
-      if (!hasText) {
+        // Primary Lissajous beam
         ctx.save();
         ctx.translate(patternX, patternY);
         ctx.rotate(vs.rotation * 0.3);
-        drawLissajous(ctx, 0, 0, baseR, a, b, delta, animOffset, color, vs.energy, true, beamAlpha);
-
-        // Mirror beam — only when no animation is competing for attention
-        if (!hasAnimation && vs.energy > 0.3) {
+        drawLissajous(ctx, 0, 0, baseR, a, b, delta, animOffset, color, vs.energy, true, 1.0);
+        if (vs.energy > 0.3) {
           drawLissajous(ctx, 0, 0, baseR * 0.7, a, b, delta + Math.PI * 0.25, animOffset + 0.4, color, vs.energy * 0.5, false, 1.0);
         }
         ctx.restore();
-      }
 
-      // ── Grating: fan beams — hidden during text, faint during animation ──
-      if (vs.gratingActive && !hasText) {
-        const fanAlpha = hasAnimation ? 0.25 : 1.0;
-        const fanCount = laser?.scanTier === "pro" ? 6 : laser?.scanTier === "fast" ? 4 : 3;
-        for (let i = 0; i < fanCount; i++) {
-          const angle = vs.rotation + (i / fanCount) * Math.PI * 2;
-          const spread = Math.min(W, H) * 0.3;
-          const fanX = cx + Math.cos(angle) * spread;
-          const fanY = cy + Math.sin(angle) * spread;
-          const fanR = baseR * 0.45;
-          const dim = 0.5 + (i % 2) * 0.25;
-          drawLissajous(ctx, fanX, fanY, fanR, a, b, delta + i * 1.1, animOffset, color, vs.energy * dim, false, fanAlpha);
+        // Grating fan beams
+        if (vs.gratingActive) {
+          const fanCount = laser?.scanTier === "pro" ? 6 : laser?.scanTier === "fast" ? 4 : 3;
+          for (let i = 0; i < fanCount; i++) {
+            const angle  = vs.rotation + (i / fanCount) * Math.PI * 2;
+            const spread = Math.min(W, H) * 0.3;
+            const fanX   = cx + Math.cos(angle) * spread;
+            const fanY   = cy + Math.sin(angle) * spread;
+            const fanR   = baseR * 0.45;
+            const dim    = 0.5 + (i % 2) * 0.25;
+            drawLissajous(ctx, fanX, fanY, fanR, a, b, delta + i * 1.1, animOffset, color, vs.energy * dim, false, 1.0);
+          }
         }
       }
 
