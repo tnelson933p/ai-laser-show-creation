@@ -49,6 +49,8 @@ export default function Dashboard() {
   const [port, setPort] = useState<SerialPort | null>(null);
   const [webSerialSupported, setWebSerialSupported] = useState(true);
   const [dmxExpanded, setDmxExpanded] = useState(false);
+  const [dmxCableType, setDmxCableType] = useState<"enttec-pro" | "raw">("enttec-pro");
+  const dmxCableTypeRef = useRef<"enttec-pro" | "raw">("enttec-pro");
 
   // Show engine
   const engineRef = useRef<ShowEngine | null>(null);
@@ -98,14 +100,26 @@ export default function Dashboard() {
     if (models.length > 0) setSelectedModel(models[0].model);
   };
 
+  // Keep the cable-type ref in sync so the dmxLoop closure reads the latest value
+  useEffect(() => { dmxCableTypeRef.current = dmxCableType; }, [dmxCableType]);
+
   // ── Hardware ────────────────────────────────────────────────────────────
   const connectPort = async () => {
     try {
       const p = await navigator.serial.requestPort();
-      await p.open({ baudRate: 250000 });
+      // ENTTEC Pro / SoundSwitch: 57600 baud, CDC framing handled by device firmware
+      // Generic Open DMX / raw: 250000 baud, 8 data bits, 2 stop bits, no parity
+      const baudRate = dmxCableTypeRef.current === "enttec-pro" ? 57600 : 250000;
+      await p.open({
+        baudRate,
+        dataBits: 8,
+        stopBits: dmxCableTypeRef.current === "enttec-pro" ? 1 : 2,
+        parity: "none",
+        flowControl: "none",
+      });
       setPort(p);
       writerRef.current = p.writable?.getWriter() ?? null;
-    } catch { /* user cancelled */ }
+    } catch { /* user cancelled or access denied */ }
   };
 
   // ── Audio ───────────────────────────────────────────────────────────────
@@ -268,10 +282,26 @@ export default function Dashboard() {
 
     if (writerRef.current) {
       try {
-        const chCount = result.channels.length;
-        const packet = new Uint8Array(chCount + 1);
-        packet[0] = 0x00;
-        for (let i = 0; i < chCount; i++) packet[i + 1] = result.channels[i];
+        const ch = result.channels;
+        let packet: Uint8Array;
+        if (dmxCableTypeRef.current === "enttec-pro") {
+          // ENTTEC DMX USB Pro / SoundSwitch protocol:
+          // [0x7E] [label=6] [len_lsb] [len_msb] [0x00=start_code] [ch...] [0xE7]
+          const dataLen = ch.length + 1; // +1 for the DMX start code byte
+          packet = new Uint8Array(5 + ch.length + 1);
+          packet[0] = 0x7E;                   // SOM
+          packet[1] = 0x06;                   // Label: Send DMX Packet Request
+          packet[2] = dataLen & 0xFF;         // Length LSB
+          packet[3] = (dataLen >> 8) & 0xFF;  // Length MSB
+          packet[4] = 0x00;                   // DMX start code
+          for (let i = 0; i < ch.length; i++) packet[5 + i] = ch[i];
+          packet[5 + ch.length] = 0xE7;       // EOM
+        } else {
+          // Generic Open DMX: raw 250kbps — start code + channel data
+          packet = new Uint8Array(ch.length + 1);
+          packet[0] = 0x00;
+          for (let i = 0; i < ch.length; i++) packet[i + 1] = ch[i];
+        }
         writerRef.current.write(packet);
       } catch { /* port error, ignore */ }
     }
@@ -487,18 +517,49 @@ export default function Dashboard() {
 
                   {/* DMX connect */}
                   {webSerialSupported && (
-                    <Button
-                      onClick={connectPort}
-                      variant="outline"
-                      size="sm"
-                      className={cn(
-                        "border-zinc-800 text-zinc-400 hover:text-white rounded-sm text-xs",
-                        port && "border-[#00ff9d]/40 text-[#00ff9d]"
+                    <div className="space-y-2">
+                      {/* Cable type selector — only show when not connected */}
+                      {!port && (
+                        <div className="flex rounded-sm border border-zinc-800 overflow-hidden text-[10px]">
+                          <button
+                            onClick={() => setDmxCableType("enttec-pro")}
+                            className={cn(
+                              "flex-1 px-2 py-1.5 transition-colors",
+                              dmxCableType === "enttec-pro"
+                                ? "bg-[#00ff9d]/10 text-[#00ff9d] border-r border-[#00ff9d]/20"
+                                : "text-zinc-600 hover:text-zinc-400 border-r border-zinc-800"
+                            )}
+                          >
+                            ENTTEC Pro / SoundSwitch
+                          </button>
+                          <button
+                            onClick={() => setDmxCableType("raw")}
+                            className={cn(
+                              "flex-1 px-2 py-1.5 transition-colors",
+                              dmxCableType === "raw"
+                                ? "bg-[#00ff9d]/10 text-[#00ff9d]"
+                                : "text-zinc-600 hover:text-zinc-400"
+                            )}
+                          >
+                            Generic USB-DMX
+                          </button>
+                        </div>
                       )}
-                    >
-                      <Usb className="w-3 h-3 mr-1.5" />
-                      {port ? "DMX Connected" : "Connect DMX Hardware"}
-                    </Button>
+                      <Button
+                        onClick={connectPort}
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          "w-full border-zinc-800 text-zinc-400 hover:text-white rounded-sm text-xs",
+                          port && "border-[#00ff9d]/40 text-[#00ff9d]"
+                        )}
+                      >
+                        <Usb className="w-3 h-3 mr-1.5" />
+                        {port
+                          ? `DMX Connected · ${dmxCableType === "enttec-pro" ? "ENTTEC Pro" : "Raw 250k"}`
+                          : "Connect DMX Hardware"}
+                      </Button>
+                    </div>
                   )}
                 </div>
               )}
