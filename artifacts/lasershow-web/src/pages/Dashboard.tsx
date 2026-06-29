@@ -99,6 +99,42 @@ export default function Dashboard() {
   useEffect(() => { setlistRef.current = setlist; }, [setlist]);
   useEffect(() => { currentTrackIdxRef.current = currentTrackIdx; }, [currentTrackIdx]);
 
+  // Preview loop — runs show engine with synthetic audio when not playing,
+  // so the canvas always reflects the current AI settings visually.
+  const previewTimeRef = useRef(0);
+  const previewLoopRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (isPlaying || !engineRef.current || !laser) {
+      // Real dmxLoop handles it, or no laser — let canvas show idle/null
+      if (previewLoopRef.current) {
+        clearInterval(previewLoopRef.current);
+        previewLoopRef.current = null;
+      }
+      return;
+    }
+    // Start synthetic preview at 40 Hz
+    previewTimeRef.current = 0;
+    previewLoopRef.current = window.setInterval(() => {
+      if (!engineRef.current) return;
+      previewTimeRef.current += 1 / 40;
+      const t = previewTimeRef.current;
+      const bpm = 120;
+      // Punchy synthetic "music" — gives the engine enough energy to show patterns clearly
+      const bass = 0.55 + Math.sin(t * Math.PI * 2 * (bpm / 60)) * 0.40;
+      const mid  = 0.40 + Math.sin(t * 1.7 + 1.2) * 0.25;
+      const high = 0.20 + Math.sin(t * 3.1 + 2.5) * 0.15;
+      const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: t }, showOverridesRef.current);
+      visualStateRef.current = result.visualState;
+    }, 25);
+    return () => {
+      if (previewLoopRef.current) {
+        clearInterval(previewLoopRef.current);
+        previewLoopRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, laser]);
+
   // Init
   useEffect(() => {
     document.documentElement.classList.add("dark");
@@ -934,8 +970,8 @@ export default function Dashboard() {
         </div>
 
         {/* ── Laser Show Preview Canvas ───────────────────────────────── */}
-        <Card className="border-zinc-800/60 bg-black shadow-2xl flex-1">
-          <CardContent className="p-0">
+        <Card className="border-zinc-800/60 bg-black shadow-2xl" style={{ minHeight: 340, flex: 1 }}>
+          <CardContent className="p-0 h-full">
             <LaserCanvas
               visualStateRef={visualStateRef}
               isPlaying={isPlaying}
@@ -1484,6 +1520,17 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvas
         ctx.globalAlpha = flash * 0.07;
         ctx.fillStyle = color;
         ctx.fillRect(0, 0, W, H);
+        ctx.globalAlpha = 1;
+      }
+
+      // Preview mode label — shown when not in live playback
+      if (!isPlaying) {
+        const fontSize = 10 * window.devicePixelRatio;
+        ctx.font = `${fontSize}px monospace`;
+        ctx.textAlign = "left";
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle = "#00ff9d";
+        ctx.fillText("◌ PREVIEW — AI settings active", 12 * window.devicePixelRatio, 20 * window.devicePixelRatio);
         ctx.globalAlpha = 1;
       }
 
