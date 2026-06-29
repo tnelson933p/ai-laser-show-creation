@@ -7,7 +7,7 @@ const router = Router();
 // POST /api/laser/analyze
 // Body: { brand: string, model: string, channelCount: number, colorMode: string, scanTier: string, features: string[] }
 // Returns: streaming SSE with AI-generated deep analysis & show strategy
-router.post("/api/laser/analyze", async (req, res) => {
+router.post("/laser/analyze", async (req, res) => {
   const { brand, model, channelCount, colorMode, scanTier, features, availableColors } = req.body as {
     brand: string;
     model: string;
@@ -92,7 +92,7 @@ Keep the response focused, expert-level, and under 300 words. Use specific numbe
 // Body: { laser, messages: [{role,content}][], currentSettings }
 // Streams SSE. AI may embed <settings>{...}</settings> to update show params.
 // ─────────────────────────────────────────────────────────────────────────────
-router.post("/api/laser/chat", async (req, res) => {
+router.post("/laser/chat", async (req, res) => {
   const { laser, messages, currentSettings } = req.body as {
     laser: {
       brand: string; model: string; channelCount: number;
@@ -130,8 +130,8 @@ Current show settings: ${JSON.stringify(currentSettings, null, 2)}`;
 
 Laser fixture: ${laser.brand} ${laser.model}
 DMX channels: ${laser.channelCount} | Color: ${laser.colorMode} | Scanner: ${laser.scanTier}
-Colors available: ${laser.availableColors.join(", ")}
-Features: ${laser.specialFeatures.join(", ") || "standard"}
+Colors available: ${(laser.availableColors ?? []).join(", ")}
+Features: ${(laser.specialFeatures ?? []).join(", ") || "standard"}
 
 ${settingsDoc}
 
