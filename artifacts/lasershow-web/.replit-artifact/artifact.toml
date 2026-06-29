@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "AI LaserShow Web"
+version = "1.0.0"
+id = "artifacts/lasershow-web"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20649
+
+[services.development]
+run = "pnpm --filter @workspace/lasershow-web run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/lasershow-web", "run", "build" ]
+publicDir = "artifacts/lasershow-web/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20649"
+BASE_PATH = "/"

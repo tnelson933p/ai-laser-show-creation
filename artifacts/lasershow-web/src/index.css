@@ -1,0 +1,99 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-card-border: var(--card-border);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover-border: var(--popover-border);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+:root, .dark {
+  --background: #050505;
+  --foreground: #e5e5e5;
+  
+  --border: #1f1f1f;
+  --input: #1f1f1f;
+  --ring: #00ff9d;
+  
+  --card: #0a0a0a;
+  --card-foreground: #e5e5e5;
+  --card-border: #1a1a1a;
+  
+  --popover: #0a0a0a;
+  --popover-foreground: #e5e5e5;
+  --popover-border: #1a1a1a;
+  
+  --primary: #00ff9d;
+  --primary-foreground: #000000;
+  
+  --secondary: #1a1a1a;
+  --secondary-foreground: #e5e5e5;
+  
+  --muted: #111111;
+  --muted-foreground: #888888;
+  
+  --accent: #111111;
+  --accent-foreground: #00ff9d;
+  
+  --destructive: #ff3366;
+  --destructive-foreground: #ffffff;
+  
+  --radius: 0.25rem;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  border-color: var(--border);
+}
+
+.laser-glow-bass {
+  box-shadow: 0 0 15px 2px rgba(255, 68, 0, 0.4);
+}
+.laser-glow-mid {
+  box-shadow: 0 0 15px 2px rgba(0, 255, 157, 0.4);
+}
+.laser-glow-high {
+  box-shadow: 0 0 15px 2px rgba(187, 0, 255, 0.4);
+}
