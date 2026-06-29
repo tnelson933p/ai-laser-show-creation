@@ -104,44 +104,6 @@ export default function Dashboard() {
   useEffect(() => { setlistRef.current = setlist; }, [setlist]);
   useEffect(() => { currentTrackIdxRef.current = currentTrackIdx; }, [currentTrackIdx]);
 
-  // Preview loop — runs show engine with synthetic audio when not playing,
-  // so the canvas always reflects the current AI settings visually.
-  const previewTimeRef = useRef(0);
-  const previewLoopRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (isPlaying || !engineRef.current || !laser) {
-      // Real dmxLoop handles it, or no laser — let canvas show idle/null
-      if (previewLoopRef.current) {
-        clearInterval(previewLoopRef.current);
-        previewLoopRef.current = null;
-      }
-      return;
-    }
-    // Start synthetic preview at 40 Hz
-    previewTimeRef.current = 0;
-    previewLoopRef.current = window.setInterval(() => {
-      if (!engineRef.current) return;
-      previewTimeRef.current += 1 / 40;
-      const t = previewTimeRef.current;
-      const bpm = 120;
-      // Full-range synthetic audio — all bands reach their peaks so every
-      // AI setting (strobe, grating, zoom snaps, color) fires visibly in preview.
-      // Bass: punchy 2-beat cycle  Mid: flowing  High: quick peaks for strobe
-      const beat = t * Math.PI * 2 * (bpm / 60);
-      const bass = Math.max(0, Math.min(1, 0.55 + Math.sin(beat) * 0.44));
-      const mid  = Math.max(0, Math.min(1, 0.48 + Math.sin(t * 1.7 + 1.2) * 0.40));
-      const high = Math.max(0, Math.min(1, 0.55 + Math.sin(t * 4.3 + 2.1) * 0.44));
-      const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: t }, showOverridesRef.current);
-      visualStateRef.current = result.visualState;
-    }, 25);
-    return () => {
-      if (previewLoopRef.current) {
-        clearInterval(previewLoopRef.current);
-        previewLoopRef.current = null;
-      }
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, laser]);
 
   // Init
   useEffect(() => {
@@ -1444,7 +1406,6 @@ interface LaserCanvasProps {
 function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
-  const idlePhaseRef = useRef(0);
   const trailBufferRef = useRef<ImageData | null>(null);
 
   useEffect(() => {
@@ -1474,31 +1435,10 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvas
       ctx.globalAlpha = 1;
 
       if (!vs) {
-        // Idle animation — slow spinning circle in the laser's color
-        idlePhaseRef.current += 0.008;
-        const t = idlePhaseRef.current;
-        const cx = W / 2;
-        const cy = H / 2;
-        const r  = Math.min(W, H) * 0.28;
-        const color = laser ? laserIdleColor(laser) : "#00ff9d";
-        drawLissajous(ctx, cx, cy, r, 1, 1, Math.PI / 2, t * 0.4, color, 0.5 + Math.sin(t) * 0.3, false);
-        // Scan dot
-        const dotX = cx + Math.cos(t * 2) * r * 0.9;
-        const dotY = cy + Math.sin(t * 2) * r * 0.9;
-        ctx.beginPath();
-        ctx.arc(dotX, dotY, 2.5 * window.devicePixelRatio, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.shadowBlur = 18;
-        ctx.shadowColor = color;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        // Label
-        ctx.globalAlpha = 0.35;
-        ctx.fillStyle = "#ffffff";
-        ctx.font = `${11 * window.devicePixelRatio}px monospace`;
-        ctx.textAlign = "center";
-        ctx.fillText(laser ? `${laser.brand} ${laser.model}` : "LOAD LASER + MUSIC", cx, H - 20 * window.devicePixelRatio);
+        // No show playing — fully dark canvas, nothing animating
+        ctx.fillStyle = "#000008";
         ctx.globalAlpha = 1;
+        ctx.fillRect(0, 0, W, H);
         return;
       }
 
