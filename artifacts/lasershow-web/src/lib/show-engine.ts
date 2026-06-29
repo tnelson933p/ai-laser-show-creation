@@ -358,9 +358,11 @@ export class ShowEngine {
   reset() {
     this.currentPatternIdx = 0;
     this.lastPatternShiftBeat = -1;
-    this.phaseAccumulator = 0;
+    // Randomize starting phase so every show starts from a different point in
+    // the Lissajous cycle — prevents the "same sequence every play" effect
+    this.phaseAccumulator = Math.random() * Math.PI * 2;
     this.zoomDecay = 0;
-    this.bankIndex = 0;
+    this.bankIndex = Math.floor(Math.random() * 4);
     this.lastBankShiftPhrase = -1;
     this.energyHistory = [];
   }

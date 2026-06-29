@@ -1623,22 +1623,37 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
       ctx.fillStyle = fogGrad;
       ctx.fillRect(0, 0, W, H);
 
-      // ── Primary Lissajous — rotated by vs.rotation ───────────────
+      // ── Primary Lissajous beam ────────────────────────────────────
+      // When an animation overlay is active, the animation IS the show.
+      // The beam becomes subtle atmosphere — a faint halo, not a foreground trace.
+      // When text is showing, the beam disappears entirely so nothing competes.
+      const hasAnimation = vs.animationStyle !== "none";
+      const hasText      = vs.textEnabled && !!vs.textContent;
+
       const [a, b, delta] = LISSAJOUS_PRESETS[vs.patternIndex % LISSAJOUS_PRESETS.length];
-      ctx.save();
-      ctx.translate(patternX, patternY);
-      ctx.rotate(vs.rotation * 0.3); // slow rotation driven by engine
-      drawLissajous(ctx, 0, 0, baseR, a, b, delta, animOffset, color, vs.energy, true);
 
-      // Mirror beam (second Lissajous slightly offset in phase) for richness
-      if (vs.energy > 0.3) {
-        drawLissajous(ctx, 0, 0, baseR * 0.7, a, b, delta + Math.PI * 0.25, animOffset + 0.4, color, vs.energy * 0.5, false);
+      if (!hasText) {
+        // Reduce beam opacity dramatically when animation is running (it becomes background atmosphere)
+        const beamAlpha = hasAnimation ? 0.18 : 1.0;
+        ctx.save();
+        ctx.globalAlpha = beamAlpha;
+        ctx.translate(patternX, patternY);
+        ctx.rotate(vs.rotation * 0.3);
+        drawLissajous(ctx, 0, 0, baseR, a, b, delta, animOffset, color, vs.energy, true);
+
+        // Mirror beam — only draw when no animation is competing for attention
+        if (!hasAnimation && vs.energy > 0.3) {
+          drawLissajous(ctx, 0, 0, baseR * 0.7, a, b, delta + Math.PI * 0.25, animOffset + 0.4, color, vs.energy * 0.5, false);
+        }
+        ctx.restore();
       }
-      ctx.restore();
 
-      // ── Grating: fan beams spread around canvas ───────────────────
-      if (vs.gratingActive) {
+      // ── Grating: fan beams — only when no text is showing ────────
+      if (vs.gratingActive && !hasText) {
         const fanCount = laser?.scanTier === "pro" ? 6 : laser?.scanTier === "fast" ? 4 : 3;
+        const fanAlpha = hasAnimation ? 0.25 : 1.0;
+        ctx.save();
+        ctx.globalAlpha = fanAlpha;
         for (let i = 0; i < fanCount; i++) {
           const angle = vs.rotation + (i / fanCount) * Math.PI * 2;
           const spread = Math.min(W, H) * 0.3;
@@ -1648,6 +1663,7 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
           const dim = 0.5 + (i % 2) * 0.25;
           drawLissajous(ctx, fanX, fanY, fanR, a, b, delta + i * 1.1, animOffset, color, vs.energy * dim, false);
         }
+        ctx.restore();
       }
 
       // ── Energy flash: color wash at peaks ────────────────────────
