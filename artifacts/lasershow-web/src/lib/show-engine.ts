@@ -38,6 +38,7 @@ export interface VisualState {
   textEnabled: boolean;
   textContent: string;
   animationStyle: "none" | "stars" | "fireworks" | "wave" | "spiral" | "butterfly" | "hands" | "birds" | "rain" | "lightning" | "heart" | "galaxy";
+  animationCode?: string;  // AI-generated canvas drawing code (overrides animationStyle)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -84,6 +85,7 @@ export interface SceneSettings {
   textEnabled?: boolean;
   textContent?: string;
   animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral" | "butterfly" | "hands" | "birds" | "rain" | "lightning" | "heart" | "galaxy";
+  animationCode?: string;  // AI-written canvas code — takes precedence over animationStyle
 }
 
 export interface ShowOverrides {
@@ -101,6 +103,7 @@ export interface ShowOverrides {
   textContent?: string;
   // 2D animation overlay drawn on top of Lissajous patterns
   animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral" | "butterfly" | "hands" | "birds" | "rain" | "lightning" | "heart" | "galaxy";
+  animationCode?: string;  // AI-written canvas code — takes precedence over animationStyle
   // Sequenced show — array of scenes that auto-advance during playback
   sequence?: SceneSettings[];
   // Music transition commands (consumed and cleared by Dashboard)
@@ -350,6 +353,7 @@ export class ShowEngine {
       textEnabled:    overrides.textEnabled    ?? false,
       textContent:    overrides.textContent    ?? "",
       animationStyle: overrides.animationStyle ?? "none",
+      animationCode:  overrides.animationCode,
     };
 
     return { channels, visualState };

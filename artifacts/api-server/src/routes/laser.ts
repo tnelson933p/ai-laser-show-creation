@@ -125,7 +125,7 @@ router.post("/laser/chat", async (req, res) => {
 
   const settingsDoc = `
 ═══════════════════════════════════════════════════════
-SCENE PARAMETERS — every scene needs all 11 fields, NO LABEL:
+SCENE PARAMETERS — every scene needs all fields, NO LABEL:
 ═══════════════════════════════════════════════════════
 
 durationBars: integer
@@ -135,34 +135,59 @@ durationBars: integer
     At 90  BPM → 1 bar = 2.7 sec | 3 bars = 8.0 sec | 4 bars = 10.7 sec
     At 80  BPM → 1 bar = 3.0 sec | 2 bars = 6 sec | 3 bars = 9 sec
   → ALWAYS calculate using the actual BPM from the music context above.
-  → For "no longer than 8 seconds": use math to find the max bars for that BPM.
 
-animationStyle: "none" | "stars" | "fireworks" | "wave" | "spiral" | "butterfly" | "hands" | "birds" | "rain" | "lightning" | "heart" | "galaxy"
-  → The main visual centerpiece. MUST vary — no two adjacent scenes with same animationStyle.
+animationCode: string (REQUIRED — write JavaScript that draws the animation)
+  ─────────────────────────────────────────────────────
+  YOU ARE A CREATIVE CODER. Write canvas drawing code for each scene.
+  You have complete creative freedom — draw anything the music demands.
+  Animals, crowds, geometry, space, architecture, nature, abstract art — anything.
+  ─────────────────────────────────────────────────────
+  VARIABLES IN SCOPE (do NOT redeclare these):
+    ctx    — CanvasRenderingContext2D, already configured with laser glow + color
+    t      — time in seconds (always increasing) — use Math.sin(t*speed) to animate
+    energy — 0..1 live music energy — scale sizes, counts, brightness with this
+    cx, cy — canvas center in pixels
+    W, H   — canvas width/height in pixels
+    R      — reference radius = 0.38 * min(W,H) — base all your sizes on R
+    color  — hex string e.g. "#00ff9d" — current laser color
+    dpr    — device pixel ratio — multiply lineWidth values by dpr
+    Math, performance — standard globals available
 
-  CLASSIC:
-    "stars"     — 5-pointed stars orbiting center. Patriotic, elegant, celestial.
-    "fireworks" — burst rays exploding from 3 points. Explosive celebration.
-    "wave"      — 3 sine-wave beams sweeping the canvas. Rhythmic, hypnotic.
-    "spiral"    — dual counter-rotating Archimedean spirals. Psychedelic, trance.
+  ctx IS PRE-SET with:
+    strokeStyle=color, shadowColor=color, shadowBlur active,
+    lineWidth=(1.4+energy)*dpr, lineCap="round", globalAlpha=0.65+energy*0.3
+  → Override freely. Use ctx.save()/ctx.restore() to isolate state changes.
 
-  CHARACTER / NARRATIVE (use these! the audience loves them):
-    "butterfly" — a glowing butterfly gliding across the space, wings flapping to the beat.
-                  USE FOR: "butterfly", "flying", "wings", "free", "soaring", nature lyrics.
-    "hands"     — 5 laser-traced stick figures with arms raised high, bobbing to music.
-                  USE FOR: "hands up", "raise your hands", "everybody", crowd moments, anthems.
-    "birds"     — flock of 7 birds in V-formation sweeping across the canvas, wings flapping.
-                  USE FOR: "flying away", "birds", "freedom", "sky", migration imagery.
-    "heart"     — parametric neon heart pulsing with bass energy, inner heart echoing.
-                  USE FOR: "love", "heart", "feeling", emotional moments, slow sections.
-    "lightning" — jagged electric bolts striking from above, branching on energy peaks.
-                  USE FOR: "electric", "thunder", "power", "shock", intense/aggressive moments.
-    "rain"      — vertical laser streaks falling like rain, density responsive to energy.
-                  USE FOR: "rain", "tears", "falling", "pouring", melancholy or cathartic moments.
-    "galaxy"    — rotating galaxy with spiral arms and orbiting star particles.
-                  USE FOR: "universe", "cosmos", "space", "infinite", epic or dreamlike moments.
+  RULES:
+    • ALWAYS stroke, NEVER fill — laser = traced vector paths, not solid shapes
+    • Animate with t: Math.sin(t*speed), (t*freq)%(2*Math.PI), etc.
+    • React to music: scale counts/sizes by energy, branch on energy>0.5
+    • Use ctx.globalAlpha for brightness variation between sub-elements
+    • Keep code compact — 8 to 25 lines. No async, no DOM, no external refs.
 
-    "none"      — FORBIDDEN unless user explicitly asked for a dark/empty moment. Max 1 scene.
+  EXAMPLE PATTERNS (study these, then invent your own visuals):
+
+  // DNA double helix
+  for(let s=0;s<2;s++){ctx.beginPath();for(let i=0;i<=120;i++){const f=i/120,a=f*Math.PI*8+t*.6+s*Math.PI,px=cx+Math.cos(a)*R*.7,py=cy-R*.85+f*R*1.7;i?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.stroke();}
+  for(let i=0;i<16;i++){const f=i/16,a=f*Math.PI*8+t*.6,y=cy-R*.85+f*R*1.7,x1=cx+Math.cos(a)*R*.7,x2=cx+Math.cos(a+Math.PI)*R*.7;ctx.globalAlpha=.25;ctx.beginPath();ctx.moveTo(x1,y);ctx.lineTo(x2,y);ctx.stroke();}
+
+  // Pulsing mandala (great for drops and emotional peaks)
+  const petals=6+Math.round(energy*4);for(let i=0;i<petals;i++){const a=i/petals*Math.PI*2+t*.4;ctx.save();ctx.translate(cx,cy);ctx.rotate(a);ctx.beginPath();ctx.ellipse(0,-R*.5,R*.12*(1+energy*.5),R*.3,0,0,Math.PI*2);ctx.stroke();ctx.restore();}ctx.beginPath();ctx.arc(cx,cy,R*.2*(1+energy*.4),0,Math.PI*2);ctx.stroke();
+
+  // Rotating wireframe cube (cool for mechanical/industrial moments)
+  const s=R*.5,ca=Math.cos(t*.5),sa=Math.sin(t*.5),cb=Math.cos(t*.3),sb=Math.sin(t*.3);const p=(x,y,z)=>{const rx=x*ca-z*sa,rz=x*sa+z*ca,ry=y*cb-rz*sb;return[cx+rx*1.8,cy+ry*1.8];};const v=[[-1,-1,-1],[-1,-1,1],[-1,1,-1],[-1,1,1],[1,-1,-1],[1,-1,1],[1,1,-1],[1,1,1]].map(([x,y,z])=>p(x*s,y*s,z*s));[[0,1],[0,2],[1,3],[2,3],[4,5],[4,6],[5,7],[6,7],[0,4],[1,5],[2,6],[3,7]].forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(v[a][0],v[a][1]);ctx.lineTo(v[b][0],v[b][1]);ctx.stroke();});
+
+  // Crowd of raised hands / stick figures
+  for(let i=0;i<7;i++){const fx=cx+(i-3)*W*.12,bob=Math.sin(t*2+i)*R*.04*(1+energy);const fy=cy+R*.35+bob,fh=R*.55;ctx.beginPath();ctx.arc(fx,fy-fh*.9,fh*.1,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(fx,fy-fh*.75);ctx.lineTo(fx,fy-fh*.35);ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx-fh*(Math.sin(t*2+i)*.1+.35),fy-fh*(Math.sin(t*1.8+i)*.06+.88+energy*.12));ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx+fh*(Math.sin(t*2+i+1)*.1+.35),fy-fh*(Math.sin(t*1.8+i+1)*.06+.88+energy*.12));ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx-fh*.16,fy);ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx+fh*.16,fy);ctx.stroke();}
+
+  // Ocean waves (layered sinusoids)
+  for(let w=0;w<5;w++){ctx.globalAlpha=(0.35+energy*.3)*(1-w*.15);ctx.beginPath();for(let x=0;x<=W;x+=3){const y=cy+(w-2)*H*.13+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))*H*(0.06+energy*.07);x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}
+
+  CREATE YOUR OWN — these are starting points, not a menu.
+  Think about what the music and lyrics demand: a running horse, rising phoenix,
+  solar system, neon cityscape, falling petals, lightning storm, aurora borealis.
+  Make every scene feel like a completely different visual universe.
+  ─────────────────────────────────────────────────────
 
 movementStyle: "lissajous" | "sweep" | "bounce" | "step"
   → How the beam center moves. Must rotate through ALL 4 across a show:
@@ -200,7 +225,7 @@ patternShiftBeats: 4 | 8 | 16 | 32
 
 textEnabled: boolean + textContent: string
   → Laser-traces text in glowing light. Keep 1–3 words. "AMERICA", "USA", "HAPPY 4TH", "FREEDOM", "2025".
-  → Always pair with animationStyle "stars" or "fireworks" for a halo effect.
+  → Pair with animationCode that draws a star/burst halo around the text.
 
 Current show settings: ${JSON.stringify(currentSettings, null, 2)}`;
 
@@ -220,17 +245,17 @@ ${musicContext.lyrics}
 LYRIC-SYNC INSTRUCTIONS:
 1. Parse each timestamp (M:SS format) and convert to bar number: bar = floor(timeSeconds / ${secPerBar.toFixed(2)})
 2. Calculate durationBars as the gap between this timestamp and the next one (or end of song)
-3. Choose the animation and content based on the actual lyric/moment:
-   - "hands up" / "raise your hands" / arms → use animationStyle "hands", textEnabled may say "PUT YOUR HANDS UP"
-   - "butterfly" / "flying" / "wings" / animals → use animationStyle "butterfly" or "birds"
-   - "love" / "heart" → use animationStyle "heart"
-   - rain / falling / tears → use animationStyle "rain"
-   - electric / thunder / lightning → use animationStyle "lightning"
-   - spinning / galaxy / universe → use animationStyle "galaxy"
-   - celebration / party / fireworks → use animationStyle "fireworks"
-   - stars / shine / sparkle → use animationStyle "stars"
-   - intro / build → use animationStyle "wave" or "spiral"
-4. SCENE NAMES MUST MATCH THE LYRIC MOMENT — be literal and creative, not generic
+3. Write an animationCode that LITERALLY ILLUSTRATES the lyric/moment:
+   - "hands up" / "raise your hands" → write crowd stick-figures with arms raised, bobbing to beat
+   - "butterfly" / "wings" / flying animals → write a butterfly or bird flock with flapping bezier wings
+   - "love" / "heart" → draw a parametric heart pulsing with energy
+   - "rain" / "tears" / falling → write vertical streaks falling top-to-bottom
+   - "electric" / "lightning" / "thunder" → write jagged branching bolt paths
+   - "universe" / "galaxy" / "space" → write a rotating spiral galaxy with star particles
+   - "fire" / "burn" → write upward-flickering flame shapes
+   - "rise" / "build" / intro → write expanding rings or an ascending wave
+   - Don't limit yourself to these — invent visuals that match the specific lyric
+4. The animation must make the audience RECOGNIZE what the lyric says — be literal and bold
 ` : ""}
 Energy advice: Bass ${(musicContext.avgBass * 100).toFixed(0)}% → ${musicContext.avgBass > 0.4 ? "lower bassThreshold (0.2–0.3), enable zoom" : "moderate bassThreshold (0.35–0.5)"}. High ${(musicContext.avgHigh * 100).toFixed(0)}% → ${musicContext.avgHigh > 0.35 ? "grating on, faster movement" : "grating optional"}.`
     : "\nNo track loaded yet — give general advice until the user loads music.";
@@ -255,45 +280,41 @@ MODE 1 — TWEAK: user changes one thing → flat JSON with only changed fields
 
 MODE 2 — SEQUENCE: any show/scene design request → JSON with "sequence" array.
 
-──────────────── REFERENCE EXAMPLE — 4th of July with lyric-sync ────────────────
-(This example shows a show timed to a song with BPM=120 and specific lyric moments. NO labels.)
+──────────────── REFERENCE EXAMPLE — 3-scene snippet (BPM=120, animationCode style) ────────────────
+(Compact example showing animationCode pattern. Real shows need 6–12 scenes.)
 <settings>{"sequence": [
-  {"durationBars": 4, "movementStyle": "sweep",     "animationStyle": "wave",      "textEnabled": false, "textContent": "", "colorIntensity": 1.3, "movementSpeed": 0.5, "patternComplexity": "simple",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.5,  "zoomEnabled": false, "patternShiftBeats": 16},
-  {"durationBars": 4, "movementStyle": "lissajous", "animationStyle": "stars",     "textEnabled": false, "textContent": "", "colorIntensity": 1.6, "movementSpeed": 0.6, "patternComplexity": "medium",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.4,  "zoomEnabled": true,  "patternShiftBeats": 16},
-  {"durationBars": 3, "movementStyle": "bounce",    "animationStyle": "hands",     "textEnabled": true,  "textContent": "HANDS UP", "colorIntensity": 1.9, "movementSpeed": 0.6, "patternComplexity": "simple",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.35, "zoomEnabled": true,  "patternShiftBeats": 8},
-  {"durationBars": 4, "movementStyle": "step",      "animationStyle": "fireworks", "textEnabled": false, "textContent": "", "colorIntensity": 1.8, "movementSpeed": 0.9, "patternComplexity": "complex", "gratingEnabled": true,  "strobeEnabled": false, "bassThreshold": 0.3,  "zoomEnabled": true,  "patternShiftBeats": 8},
-  {"durationBars": 3, "movementStyle": "lissajous", "animationStyle": "butterfly", "textEnabled": false, "textContent": "", "colorIntensity": 1.7, "movementSpeed": 0.6, "patternComplexity": "medium",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.45, "zoomEnabled": false, "patternShiftBeats": 16},
-  {"durationBars": 3, "movementStyle": "sweep",     "animationStyle": "birds",     "textEnabled": true,  "textContent": "FLY FREE", "colorIntensity": 1.8, "movementSpeed": 0.6, "patternComplexity": "simple",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.4,  "zoomEnabled": false, "patternShiftBeats": 24},
-  {"durationBars": 4, "movementStyle": "step",      "animationStyle": "galaxy",    "textEnabled": false, "textContent": "", "colorIntensity": 1.9, "movementSpeed": 0.8, "patternComplexity": "complex", "gratingEnabled": true,  "strobeEnabled": false, "bassThreshold": 0.25, "zoomEnabled": true,  "patternShiftBeats": 8},
-  {"durationBars": 4, "movementStyle": "bounce",    "animationStyle": "fireworks", "textEnabled": true,  "textContent": "USA", "colorIntensity": 2.0, "movementSpeed": 0.7, "patternComplexity": "medium",  "gratingEnabled": true,  "strobeEnabled": true,  "bassThreshold": 0.18, "zoomEnabled": true,  "patternShiftBeats": 8}
+  {"durationBars": 4, "movementStyle": "sweep", "animationCode": "for(let w=0;w<4;w++){ctx.globalAlpha=(0.4+energy*.3)*(1-w*.18);ctx.beginPath();for(let x=0;x<=W;x+=3){const y=cy+(w-1.5)*H*.14+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1.2+w*.3))*H*(0.06+energy*.07);x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 1.3, "movementSpeed": 0.5, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.5, "zoomEnabled": false, "patternShiftBeats": 16},
+  {"durationBars": 3, "movementStyle": "bounce", "animationCode": "for(let i=0;i<7;i++){const fx=cx+(i-3)*W*.12,bob=Math.sin(t*2+i)*R*.04*(1+energy),fy=cy+R*.35+bob,fh=R*.55;ctx.beginPath();ctx.arc(fx,fy-fh*.9,fh*.1,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(fx,fy-fh*.75);ctx.lineTo(fx,fy-fh*.35);ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx-fh*(Math.sin(t*2+i)*.1+.35),fy-fh*(Math.sin(t*1.8+i)*.06+.9+energy*.12));ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx+fh*(Math.sin(t*2+i+1)*.1+.35),fy-fh*(Math.sin(t*1.8+i+1)*.06+.9+energy*.12));ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx-fh*.16,fy);ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx+fh*.16,fy);ctx.stroke();}", "textEnabled": true, "textContent": "HANDS UP", "colorIntensity": 1.9, "movementSpeed": 0.6, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.35, "zoomEnabled": true, "patternShiftBeats": 8},
+  {"durationBars": 4, "movementStyle": "step", "animationCode": "const n=8+Math.round(energy*6);for(let i=0;i<n;i++){const a=i/n*Math.PI*2+t*.3,r=R*(.4+Math.sin(t*1.4+i)*.15+energy*.2);ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r);ctx.stroke();const ir=R*(.12+energy*.08);ctx.beginPath();ctx.arc(cx+Math.cos(a)*ir,cy+Math.sin(a)*ir,R*.04,0,Math.PI*2);ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 2.0, "movementSpeed": 0.9, "patternComplexity": "complex", "gratingEnabled": true, "strobeEnabled": true, "bassThreshold": 0.2, "zoomEnabled": true, "patternShiftBeats": 8}
 ]}</settings>
 
-Notice: "hands" used at the "HANDS UP" lyric moment. "butterfly" and "birds" used for the flying-away section. Character animations mix with classic ones for a varied, narrative show.
+Notice: animationCode draws different visuals per scene — ocean waves → crowd raising hands → starburst rays.
 ────────────────────────────────────────────────────
 
 ═══════════════ SEQUENCE RULES — MANDATORY ═══════════════
 
-SCENE FIELDS: exactly 11 fields per scene. NO "label" field. EVER. The word "label" must not appear anywhere in your JSON.
-Required fields: durationBars, movementStyle, animationStyle, textEnabled, textContent, colorIntensity, movementSpeed, patternComplexity, gratingEnabled, strobeEnabled, bassThreshold, zoomEnabled, patternShiftBeats
+SCENE FIELDS: NO "label" field. EVER. The word "label" must not appear anywhere in your JSON.
+Required fields: durationBars, movementStyle, animationCode, textEnabled, textContent, colorIntensity, movementSpeed, patternComplexity, gratingEnabled, strobeEnabled, bassThreshold, zoomEnabled, patternShiftBeats
 
 DURATION MATH — always compute from actual BPM:
   seconds_per_bar = 60 / BPM * 4
   max_bars_for_N_seconds = floor(N / seconds_per_bar)
   Example: BPM=120 → 2.0 sec/bar → 8 sec = 4 bars. BPM=90 → 2.67 sec/bar → 8 sec = 3 bars.
-  If user says "under 8 seconds" at 120 BPM: use durationBars ≤ 4. At 90 BPM: ≤ 3. CALCULATE IT.
 
 VARIETY — this is non-negotiable:
-  • animationStyle: NEVER the same two scenes in a row. Rotate: stars → fireworks → wave → spiral → stars…
-  • movementStyle: rotate all 4 (lissajous, sweep, bounce, step) across the show — no style used more than 3× total
-  • Each scene must feel like a completely different visual moment from all others
+  • animationCode: Every scene must draw something VISUALLY DISTINCT from all other scenes.
+    No two scenes may produce the same visual effect. Rotate between: geometric, organic, figurative, abstract, nature.
+  • movementStyle: rotate all 4 (lissajous, sweep, bounce, step) — no style used more than 3× total
+  • Each scene must feel like a completely different visual universe
 
-ANIMATION RULE: "none" is FORBIDDEN unless the user explicitly requests a dark/minimal moment. Maximum 1 scene may use "none".
+ANIMATION MANDATE: Every scene must have animationCode. An empty or null animationCode is FORBIDDEN.
+  Write at least 5 lines of canvas code per scene. More creative = better show.
 
 SPEED RULE: movementSpeed 0.4–0.7 for text scenes. 0.6–1.0 for pure animation scenes. Hard cap: 1.2.
 
 QUANTITY: 6–12 scenes depending on song length. More scenes = more variety = better show.
 
-COUNT & UNIQUENESS CHECK: Before outputting, verify: (1) no label field anywhere, (2) no two adjacent scenes share animationStyle, (3) durationBars is correct for the requested timing.
+COUNT & UNIQUENESS CHECK: Before outputting, verify: (1) no label field anywhere, (2) no two scenes draw visually similar animations, (3) durationBars is correct for the requested timing.
 
 HARD OUTPUT RULES:
 1. <settings> block at the very end after all prose.
@@ -302,29 +323,39 @@ HARD OUTPUT RULES:
 4. If user gave feedback, acknowledge it in 1 sentence then output the corrected sequence.
 
 ═══════════════════════════════════════════════════════
-DESIGN PHILOSOPHY — THINK LIKE A CHOREOGRAPHER:
+DESIGN PHILOSOPHY — THINK LIKE A CHOREOGRAPHER AND A CODER:
 ═══════════════════════════════════════════════════════
 
-You are a choreographer, not a programmer. Every scene is a deliberate visual statement. The audience should gasp, then feel something, then gasp again.
+You are a world-class choreographer AND a creative programmer. Every scene's animationCode is a deliberate visual statement drawn from scratch. The audience should gasp, then feel something, then gasp again.
 
-TENSION & RELEASE: Build complexity over 2-3 scenes (wave → stars → spiral with grating) then release into a powerful text moment ("AMERICA" blazing through stars). Repeat this arc. Vary the peak.
+THINK CINEMATICALLY: What would a film director put on screen for this lyric/moment?
+  "hands up" → draw a crowd of silhouettes with arms rising
+  "burning" → draw upward flame shapes flickering with energy
+  "falling" → rain streaks, petals, or figures tumbling
+  "rise up" → expanding concentric rings erupting from center
+  "heart" → parametric heart beating with the kick drum
+  "galaxy" → spiral arms rotating with orbiting stars
+  BUT DON'T STOP THERE — invent visuals nobody has ever seen in a laser show.
 
-CONTRAST IS EVERYTHING: After a chaotic fireworks scene (bounce + fireworks + grating + strobe), drop into a slow lissajous + wave with no grating. The silence hits harder than the explosion.
+TENSION & RELEASE: Build intensity across 2-3 scenes then explode into the climax. Vary the arc every show.
 
-TEXT IS THE CLIMAX: When "AMERICA" or "FREEDOM" appears, the audience should feel it in their chest. Slow speed. Simple pattern. Stars halos. No grating. Maximum colorIntensity. This is the money shot.
+CONTRAST IS EVERYTHING: After chaos (energy bursts, jagged geometry), drop to something organic and slow (flowing wave, single glowing heart). The contrast creates emotional impact.
 
-CREATIVITY MANDATE: Never produce two shows that feel the same. Vary the story arc. Try different combinations the user hasn't seen: spiral after text, wave as the opener instead of stars, bounce for a mechanical industrial feel. Surprise them.
+TEXT IS THE CLIMAX: When the key lyric or title appears as text, the animationCode around it should be simple and powerful — a halo effect, orbiting stars, slow expanding rings. The text must dominate.
 
-EVENT PALETTES:
-- 4th of July: stars + fireworks dominate. Text reveals: "AMERICA", "FREEDOM", "USA", "HAPPY 4TH", "INDEPENDENCE". Sweep for anthem, bounce for drop, step for drumline moments.
-- NYE: spiral countdown → fireworks explosion → "2025" reveal. Wave for anticipation. Sweep wide.
-- EDM: wave + spiral rotate. step for drops. bounce for peak energy. Speeds can reach 1.1–1.2.
-- Rock: sweep + step. Fireworks at chorus. Grating almost always on. Speed 0.7–1.1.
-- Ambient/Wedding: wave throughout. lissajous. No strobe. Gentle text reveals. Speed 0.4–0.6.
+CODE AMBITION: Each scene's animationCode should attempt something the pre-built library cannot do. A horse galloping. A fire. A phoenix. A neon cityscape. An aurora. Push the canvas API to its limits.
+
+EVENT PALETTES (animationCode ideas):
+- 4th of July: orbiting stars, exploding rays, waving flag stripes, eagle wingspan silhouette
+- NYE: countdown digits, champagne bubbles rising, firework bursts, confetti streaks
+- EDM: geometric fractals, tunnel vortex, particle explosion, strobing concentric polygons
+- Rock: jagged riffs (zigzag waveforms), lightning trees, crowd moshing silhouettes
+- Ambient/Wedding: floating petals, flowing calligraphy spirals, soft blooming flowers
 
 WHAT YOU CANNOT DO:
-- Custom pixel images
+- Load external images or bitmaps
 - Per-bar color pre-assignment (colors react to music in real time)
+- Any async, fetch, or DOM access inside animationCode
 
 RESPONSE FORMAT:
 - 1–2 crisp sentences saying what the audience will experience, then immediately the <settings> block.
@@ -343,7 +374,7 @@ fadeSeconds: number (default 3)`;
   try {
     const stream = await openai.chat.completions.create({
       model: "gpt-4o",
-      max_tokens: 3000,
+      max_tokens: 5000,
       messages: chatMessages,
       stream: true,
     });

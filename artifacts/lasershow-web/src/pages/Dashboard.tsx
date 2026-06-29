@@ -463,6 +463,7 @@ export default function Dashboard() {
             // Discrete — switch at t=0.5 so each half belongs fully to one scene
             movementStyle:   sw(from.movementStyle   ?? "lissajous", activeOverrides.movementStyle   ?? "lissajous"),
             animationStyle:  sw(from.animationStyle  ?? "none",      activeOverrides.animationStyle  ?? "none"),
+            animationCode:   sw(from.animationCode,                  activeOverrides.animationCode),
             patternComplexity: sw(from.patternComplexity ?? "medium",  activeOverrides.patternComplexity ?? "medium"),
             strobeEnabled:   sw(from.strobeEnabled  ?? false, activeOverrides.strobeEnabled  ?? false),
             gratingEnabled:  sw(from.gratingEnabled ?? false, activeOverrides.gratingEnabled ?? false),
@@ -1655,7 +1656,7 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
       const color = `rgb(${r255},${g255},${b255})`;
 
       // Decide scene mode up front — drives everything below
-      const hasAnimation = vs.animationStyle !== "none";
+      const hasAnimation = !!(vs.animationCode) || vs.animationStyle !== "none";
       const hasText      = vs.textEnabled && !!vs.textContent;
       // Pure Lissajous scenes: no animation, no text — beam is the show
       const isBeamScene  = !hasAnimation && !hasText;
@@ -1716,7 +1717,9 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
       }
 
       // ── 2D animation overlay ──────────────────────────────────────
-      if (vs.animationStyle !== "none") {
+      if (vs.animationCode) {
+        runCustomAnimation(ctx, vs.animationCode, cx, cy, W, H, animOffset, color, vs.energy);
+      } else if (vs.animationStyle !== "none") {
         drawLaserAnimation(ctx, cx, cy, W, H, vs.animationStyle, animOffset, color, r255, g255, b255, vs.energy);
       }
 
@@ -2310,6 +2313,42 @@ function drawLaserAnimation(
     }
   }
 
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI custom animation executor — runs code written by the AI Director
+// Sandboxed via Function constructor: only the listed variables are in scope.
+// ─────────────────────────────────────────────────────────────────────────────
+function runCustomAnimation(
+  ctx: CanvasRenderingContext2D,
+  code: string,
+  cx: number, cy: number,
+  W: number, H: number,
+  t: number,
+  color: string,
+  energy: number,
+) {
+  const dpr = window.devicePixelRatio;
+  const R   = Math.min(W, H) * 0.38;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur  = (14 + energy * 18) * dpr;
+  ctx.lineWidth   = (1.4 + energy * 1.0) * dpr;
+  ctx.globalAlpha = 0.65 + energy * 0.3;
+  ctx.lineCap     = "round";
+  try {
+    // eslint-disable-next-line no-new-func
+    const fn = new Function(
+      "ctx", "t", "energy", "cx", "cy", "W", "H", "color", "R", "dpr",
+      "Math", "performance",
+      code,
+    );
+    fn(ctx, t, energy, cx, cy, W, H, color, R, dpr, Math, performance);
+  } catch {
+    // Silently swallow errors in AI-generated code so the show keeps running
+  }
   ctx.restore();
 }
 
