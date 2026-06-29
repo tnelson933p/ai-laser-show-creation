@@ -394,75 +394,120 @@ ${settingsDoc}
 OUTPUT — MANDATORY FORMAT, ZERO EXCEPTIONS
 ═══════════════════════════════════════════════════════
 
-Every response ends with ONE <settings> block of valid JSON.
+Every response ends with ONE <settings> block of valid JSON. Pick exactly one mode.
 
-MODE 1 — TWEAK: user changes one thing → flat JSON with only changed fields
-<settings>{"animationStyle": "stars", "movementSpeed": 0.6}</settings>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MODE 1 — TWEAK  (no sequence exists yet, or user tweaks a single global param)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Triggers: "turn off strobe", "slow it down", "more bass" — a single setting, no full sequence context.
+Output: flat JSON with ONLY the changed fields.
+<settings>{"movementSpeed": 0.6, "strobeEnabled": false}</settings>
 
-MODE 2 — SEQUENCE: any show/scene design request → JSON with "sequence" array.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MODE 2 — BUILD NEW SHOW  (explicit request to create a complete show from scratch)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Triggers ONLY when the user says "build me a show", "create a show", "generate a show",
+  "make a show for [song/event]", "start fresh", or there is NO existing sequence at all.
+DO NOT trigger MODE 2 just because the user mentions a change or improvement.
+Output: full "sequence" array covering the entire song.
 
-──────────────── REFERENCE EXAMPLE — 3 scenes from a 120 BPM track ────────────────
-(A real show for a 3-minute track needs 14-20 scenes covering all ${totalBars} bars)
+──────────────── EXAMPLE — 3-scene snippet (real shows need 16-30 scenes) ────────────────
 <settings>{"sequence": [
   {"label": "INTRO", "durationBars": 8, "movementStyle": "sweep", "animationCode": "const kick=Math.max(0,1-beat*6)*bass;for(let ring=0;ring<4;ring++){const r=R*(.18+ring*.21+kick*.32*(1-ring*.18));ctx.globalAlpha=(.7-ring*.14)*(0.15+kick*.85);ctx.lineWidth=(2.4-ring*.38)*dpr;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.stroke();}const sn=Math.round(8+high*18);for(let i=0;i<sn;i++){const a=i/sn*Math.PI*2+t*.35;const sr=R*(.82+Math.sin(t*high*6+i)*.1+high*.15);ctx.globalAlpha=0.18+high*.6;ctx.lineWidth=1.1*dpr;ctx.beginPath();ctx.arc(cx+Math.cos(a)*sr,cy+Math.sin(a)*sr,R*.02,0,Math.PI*2);ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 1.2, "movementSpeed": 0.5, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.45, "zoomEnabled": true, "patternShiftBeats": 16},
   {"label": "DROP 1", "durationBars": 16, "movementStyle": "bounce", "animationCode": "for(let i=0;i<8;i++){const fx=cx+(i-3.5)*W*.115,bob=Math.sin(beat*Math.PI*2+i*.7)*R*.06*(1+energy*.6);const fh=R*.72,fy=cy+R*.28+bob;ctx.beginPath();ctx.arc(fx,fy-fh*.93,fh*.09,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*.22,fy-fh*.78);ctx.moveTo(fx,fy-fh*.78);ctx.lineTo(fx,fy-fh*.38);ctx.moveTo(fx-fh*.16,fy-fh*.38);ctx.lineTo(fx+fh*.16,fy-fh*.38);ctx.stroke();const aw=Math.sin(beat*Math.PI*2+i*.7)*(energy>.5?.12:.06);ctx.beginPath();ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx-fh*(.32+aw),fy-fh*(1.05+energy*.18));ctx.moveTo(fx+fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*(.32-aw),fy-fh*(1.05+energy*.18));ctx.stroke();ctx.beginPath();ctx.moveTo(fx-fh*.08,fy-fh*.38);ctx.lineTo(fx-fh*.22,fy+fh*.02);ctx.moveTo(fx-fh*.22,fy+fh*.02);ctx.lineTo(fx-fh*.28,fy+fh*.38);ctx.moveTo(fx+fh*.08,fy-fh*.38);ctx.lineTo(fx+fh*.22,fy+fh*.02);ctx.moveTo(fx+fh*.22,fy+fh*.02);ctx.lineTo(fx+fh*.28,fy+fh*.38);ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 1.9, "movementSpeed": 1.0, "patternComplexity": "complex", "gratingEnabled": true, "strobeEnabled": false, "bassThreshold": 0.25, "zoomEnabled": true, "patternShiftBeats": 8},
   {"label": "CLIMAX", "durationBars": 8, "movementStyle": "step", "animationCode": "const n=8+Math.round(energy*7);const kick=Math.max(0,1-beat*5)*bass;for(let i=0;i<n;i++){const a=i/n*Math.PI*2+t*.25;const r=R*(.38+Math.sin(t*1.3+i)*.14+kick*.35);ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r);ctx.globalAlpha=0.5+kick*.5;ctx.stroke();const ir=R*(.1+kick*.1);ctx.beginPath();ctx.arc(cx+Math.cos(a)*ir,cy+Math.sin(a)*ir,R*.04+kick*R*.03,0,Math.PI*2);ctx.globalAlpha=0.6+kick*.4;ctx.stroke();}", "textEnabled": false, "textContent": "", "colorIntensity": 2.0, "movementSpeed": 1.1, "patternComplexity": "complex", "gratingEnabled": true, "strobeEnabled": true, "bassThreshold": 0.2, "zoomEnabled": true, "patternShiftBeats": 4}
 ]}</settings>
-────────────────────────────────────────────────────
 
-═══════════════════════════════════════════════════════
-SEQUENCE RULES — MANDATORY
-═══════════════════════════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MODE 3 — PATCH EXISTING SHOW  ← USE THIS for any fix/change/improve request on an existing show
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Triggers when: a sequence already exists in currentSettings AND the user wants to change
+  specific parts — e.g. "fix the drop", "the strobe is too aggressive", "make scene 3 better",
+  "change the chorus animation", "the intro is too slow", "update DROP 2 to be more intense".
+
+CRITICAL RULE — THE SHOW IS ALREADY BUILT. DO NOT REBUILD IT.
+  You have the full existing show in "Current show settings" above (currentSettings.sequence).
+  Your job is SURGICAL: copy every scene exactly, only modify the specific scenes the user asked about.
+  Scenes the user did NOT mention = COPY THEM CHARACTER FOR CHARACTER. Do not touch them.
+  Output the full modified sequence (all scenes, unchanged + changed).
+
+HOW TO PATCH:
+  1. Identify WHICH scenes need changing (by label or position — "DROP 1", "scene 3", "the chorus", etc.)
+  2. For ONLY those scenes: write new/corrected fields (animationCode, colorIntensity, etc.)
+  3. For ALL OTHER scenes: copy them EXACTLY from currentSettings.sequence, field for field
+  4. Output the entire sequence as a "sequence" array — patched scenes changed, rest identical
+
+SCENE IDENTIFICATION RULES:
+  • "the drop" / "DROP 1" → find the scene labeled "DROP 1" or the first high-energy scene
+  • "scene 3" / "third scene" → 0-indexed: scene at index 2
+  • "the chorus" → find scenes labeled CHORUS or positioned where energy is HIGH/PEAK
+  • "the intro" → scene labeled INTRO or index 0
+  • "the outro" → last scene
+  • "the breakdown" → scene labeled BREAKDOWN or the LOW-energy scene after a peak
+  • "all the drops" → every scene labeled DROP or with strobeEnabled/high colorIntensity
+
+PATCH EXAMPLE (user says "fix the intro to use a DNA helix instead"):
+  → Copy all scenes from currentSettings.sequence
+  → Only replace the animationCode (and any related fields) in the INTRO scene
+  → Output the full sequence with all other scenes unchanged
+<settings>{"sequence": [
+  {"label": "INTRO", "durationBars": 8, "animationCode": "...NEW DNA CODE...", "movementStyle": "sweep", "textEnabled": false, "textContent": "", "colorIntensity": 1.2, "movementSpeed": 0.5, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.45, "zoomEnabled": true, "patternShiftBeats": 16},
+  ...ALL OTHER SCENES COPIED EXACTLY FROM currentSettings.sequence...
+]}</settings>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEQUENCE RULES (apply to MODE 2 and MODE 3)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 REQUIRED FIELDS per scene: label, durationBars, movementStyle, animationCode, textEnabled, textContent,
   colorIntensity, movementSpeed, patternComplexity, gratingEnabled, strobeEnabled, bassThreshold, zoomEnabled, patternShiftBeats
 
-ENERGY ALIGNMENT — NON-NEGOTIABLE:
-  Read the ENERGY TIMELINE above. Your scene energies (colorIntensity, strobeEnabled, gratingEnabled)
-  MUST match the timeline. Strobe on a QUIET bar = amateur mistake. Gentle intro on a PEAK bar = wasted drop.
-  If no timeline: use song structure intuition (quiet intro, rising build, explosive drop, brief breakdown, climax).
+ENERGY ALIGNMENT (MODE 2 only — MODE 3 preserves existing alignment unless user asks to change it):
+  Read the ENERGY TIMELINE above. Scene energies MUST match the timeline.
+  Strobe on a QUIET bar = amateur mistake. Gentle intro on a PEAK bar = wasted drop.
 
 DURATION MATH:
   seconds_per_bar = (60 / BPM) × 4
-  Your durationBars MUST sum to exactly ${totalBars > 0 ? totalBars : "total song bars"} (±2 bars tolerance).
-  NEVER let scenes run out before the song ends — show dies at the last scene otherwise.
+  Total durationBars MUST sum to exactly ${totalBars > 0 ? totalBars : "total song bars"} (±2 bars).
+  NEVER let scenes run out before the song ends — show dies at the last scene.
 
-SCENE COUNT BY SONG LENGTH:
+SCENE COUNT BY SONG LENGTH (MODE 2 builds only):
   Under 2 min  → 8–12 scenes
-  2–3 min     → 12–16 scenes
-  3–4 min     → 16–22 scenes
-  4+ min      → 22–30 scenes
+  2–3 min     → 14–18 scenes
+  3–4 min     → 18–24 scenes
+  4–6 min     → 24–32 scenes
+  6–10 min    → 32–45 scenes
+  10+ min set → build per-song (ask user which song to build for)
 
-VARIETY — NON-NEGOTIABLE:
-  • animationCode: Every scene draws something VISUALLY DISTINCT. No two scenes share a subject.
-    Rotate: geometric, organic, figurative, abstract, nature, architectural, cosmic — all different.
-  • movementStyle: rotate all 4 — no style more than 3× total
-  • colorIntensity: arc from ~1.2 at intro to 2.0 at climax — never flat
+VARIETY (MODE 2 builds):
+  • animationCode: every scene draws something VISUALLY DISTINCT — no two share a subject
+  • movementStyle: rotate all 4 — no style used more than 3× total
+  • colorIntensity: arc from ~1.2 at intro to 2.0 at climax
 
-BEAT-REACTIVITY — MANDATORY:
-  Every scene's animationCode MUST use bass, high, or beat for immediate musical reactivity.
-  Static animations (only using t and energy) are NOT acceptable. The show must FEEL alive.
+BEAT-REACTIVITY — MANDATORY in every animationCode:
+  Use bass, high, or beat for immediate musical reactivity. Not just t and energy.
   At minimum: one beat-locked effect per scene using beat + bass.
 
 ANIMATION MANDATE: Every scene must have animationCode. Null or empty = FORBIDDEN.
-  Write 20–60 lines of canvas code per scene. More creative = better show.
+  Write 20–60 lines per scene.
 
-SPEED RULE: movementSpeed 0.4–0.7 for text/ambient scenes. 0.7–1.2 for energy scenes. Hard cap: 1.2.
+SPEED RULE: movementSpeed 0.4–0.7 for text/ambient. 0.7–1.2 for energy scenes. Hard cap: 1.2.
 
-PRE-OUTPUT CHECKLIST (verify before writing the JSON):
-  ✓ label on every scene (descriptive: "INTRO", "BUILD", "DROP 1", "BREAKDOWN", "DROP 2", "CLIMAX", "OUTRO")
+PRE-OUTPUT CHECKLIST:
+  ✓ MODE 3? → every unmodified scene copied character-for-character from currentSettings.sequence
+  ✓ label on every scene
   ✓ durationBars sum = total song bars ±2
-  ✓ Every scene's energy matches the ENERGY TIMELINE  
-  ✓ No two scenes draw the same visual subject
-  ✓ Every animationCode uses beat/bass/high for reactivity (not just t+energy)
+  ✓ MODE 2: every scene energy matches ENERGY TIMELINE
+  ✓ No two scenes draw the same visual subject (MODE 2) or the patched scene doesn't duplicate an adjacent one (MODE 3)
+  ✓ Every animationCode uses beat/bass/high
   ✓ strobeEnabled:true scenes ≤ 2 total and only on PEAK bars
-  ✓ No scene has null/empty animationCode
+  ✓ No null/empty animationCode
 
 HARD OUTPUT RULES:
   1. <settings> block at the very end, after all prose
   2. Valid JSON — double-quoted strings, no trailing commas
-  3. No markdown code fences around the block
-  4. 1-2 crisp sentences before the block describing what the audience will experience
+  3. No markdown code fences
+  4. 1–2 crisp sentences before the block (for MODE 3: say which scenes you changed and why)
 
 ═══════════════════════════════════════════════════════
 DESIGN PHILOSOPHY — THINK LIKE A CHOREOGRAPHER AND A CODER
@@ -517,7 +562,7 @@ MUSIC TRANSITION COMMANDS (only when user explicitly requests fade/cut):
   try {
     const stream = await openai.chat.completions.create({
       model: "gpt-5",
-      max_completion_tokens: 16000,
+      max_completion_tokens: 32000,
       messages: chatMessages,
       stream: true,
     });
