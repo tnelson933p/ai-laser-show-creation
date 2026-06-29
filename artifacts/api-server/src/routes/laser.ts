@@ -110,6 +110,7 @@ router.post("/laser/chat", async (req, res) => {
       avgBass: number;
       avgMid: number;
       avgHigh: number;
+      lyrics?: string;
     };
   };
 
@@ -136,13 +137,32 @@ durationBars: integer
   → ALWAYS calculate using the actual BPM from the music context above.
   → For "no longer than 8 seconds": use math to find the max bars for that BPM.
 
-animationStyle: "none" | "stars" | "fireworks" | "wave" | "spiral"
-  → The main visual centerpiece. MUST vary across every scene — no two adjacent scenes with same animationStyle.
-    "stars"     — 5-pointed stars orbiting center + large central star. Patriotic, elegant.
-    "fireworks" — bursting radial lines from 3 points, pulsing with energy. Explosive.
-    "wave"      — 3 sine wave beams crossing the canvas. Rhythmic, hypnotic.
-    "spiral"    — expanding Archimedean spiral. Psychedelic, trance.
-    "none"      — NEVER use this unless deliberate contrast. Canvas goes dark. Use maximum 1 scene.
+animationStyle: "none" | "stars" | "fireworks" | "wave" | "spiral" | "butterfly" | "hands" | "birds" | "rain" | "lightning" | "heart" | "galaxy"
+  → The main visual centerpiece. MUST vary — no two adjacent scenes with same animationStyle.
+
+  CLASSIC:
+    "stars"     — 5-pointed stars orbiting center. Patriotic, elegant, celestial.
+    "fireworks" — burst rays exploding from 3 points. Explosive celebration.
+    "wave"      — 3 sine-wave beams sweeping the canvas. Rhythmic, hypnotic.
+    "spiral"    — dual counter-rotating Archimedean spirals. Psychedelic, trance.
+
+  CHARACTER / NARRATIVE (use these! the audience loves them):
+    "butterfly" — a glowing butterfly gliding across the space, wings flapping to the beat.
+                  USE FOR: "butterfly", "flying", "wings", "free", "soaring", nature lyrics.
+    "hands"     — 5 laser-traced stick figures with arms raised high, bobbing to music.
+                  USE FOR: "hands up", "raise your hands", "everybody", crowd moments, anthems.
+    "birds"     — flock of 7 birds in V-formation sweeping across the canvas, wings flapping.
+                  USE FOR: "flying away", "birds", "freedom", "sky", migration imagery.
+    "heart"     — parametric neon heart pulsing with bass energy, inner heart echoing.
+                  USE FOR: "love", "heart", "feeling", emotional moments, slow sections.
+    "lightning" — jagged electric bolts striking from above, branching on energy peaks.
+                  USE FOR: "electric", "thunder", "power", "shock", intense/aggressive moments.
+    "rain"      — vertical laser streaks falling like rain, density responsive to energy.
+                  USE FOR: "rain", "tears", "falling", "pouring", melancholy or cathartic moments.
+    "galaxy"    — rotating galaxy with spiral arms and orbiting star particles.
+                  USE FOR: "universe", "cosmos", "space", "infinite", epic or dreamlike moments.
+
+    "none"      — FORBIDDEN unless user explicitly asked for a dark/empty moment. Max 1 scene.
 
 movementStyle: "lissajous" | "sweep" | "bounce" | "step"
   → How the beam center moves. Must rotate through ALL 4 across a show:
@@ -184,16 +204,35 @@ textEnabled: boolean + textContent: string
 
 Current show settings: ${JSON.stringify(currentSettings, null, 2)}`;
 
+  const secPerBar = musicContext ? (60 / musicContext.bpm) * 4 : 2;
   const musicSection = musicContext
     ? `
-CURRENT TRACK (loaded in the show):
+CURRENT TRACK:
 - File: ${musicContext.filename}
-- BPM: ${musicContext.bpm}
-- Duration: ${Math.floor(musicContext.duration / 60)}:${String(Math.floor(musicContext.duration % 60)).padStart(2, "0")}
+- BPM: ${musicContext.bpm} → 1 bar = ${secPerBar.toFixed(2)}s | 2 bars = ${(secPerBar * 2).toFixed(1)}s | 3 bars = ${(secPerBar * 3).toFixed(1)}s | 4 bars = ${(secPerBar * 4).toFixed(1)}s
+- Duration: ${Math.floor(musicContext.duration / 60)}:${String(Math.floor(musicContext.duration % 60)).padStart(2, "0")} (${(musicContext.duration / secPerBar).toFixed(0)} total bars)
 - Status: ${musicContext.isPlaying ? "PLAYING NOW" : "paused / stopped"}
-- Energy signature — Bass avg: ${(musicContext.avgBass * 100).toFixed(0)}%, Mid avg: ${(musicContext.avgMid * 100).toFixed(0)}%, High avg: ${(musicContext.avgHigh * 100).toFixed(0)}%
+- Energy — Bass: ${(musicContext.avgBass * 100).toFixed(0)}% | Mid: ${(musicContext.avgMid * 100).toFixed(0)}% | High: ${(musicContext.avgHigh * 100).toFixed(0)}%
+${musicContext.lyrics ? `
+LYRIC TIMESTAMPS (user-provided — use these to time your scenes):
+${musicContext.lyrics}
 
-Use the BPM to set patternShiftBeats (e.g. 8 or 16 beats per pattern change), and use the energy signature to decide how aggressive the bass threshold and zoom settings should be. A high bass percentage means the track is bass-heavy — lower the bassThreshold and enable zoom snaps. High treble means enable grating and faster movement.`
+LYRIC-SYNC INSTRUCTIONS:
+1. Parse each timestamp (M:SS format) and convert to bar number: bar = floor(timeSeconds / ${secPerBar.toFixed(2)})
+2. Calculate durationBars as the gap between this timestamp and the next one (or end of song)
+3. Choose the animation and content based on the actual lyric/moment:
+   - "hands up" / "raise your hands" / arms → use animationStyle "hands", textEnabled may say "PUT YOUR HANDS UP"
+   - "butterfly" / "flying" / "wings" / animals → use animationStyle "butterfly" or "birds"
+   - "love" / "heart" → use animationStyle "heart"
+   - rain / falling / tears → use animationStyle "rain"
+   - electric / thunder / lightning → use animationStyle "lightning"
+   - spinning / galaxy / universe → use animationStyle "galaxy"
+   - celebration / party / fireworks → use animationStyle "fireworks"
+   - stars / shine / sparkle → use animationStyle "stars"
+   - intro / build → use animationStyle "wave" or "spiral"
+4. SCENE NAMES MUST MATCH THE LYRIC MOMENT — be literal and creative, not generic
+` : ""}
+Energy advice: Bass ${(musicContext.avgBass * 100).toFixed(0)}% → ${musicContext.avgBass > 0.4 ? "lower bassThreshold (0.2–0.3), enable zoom" : "moderate bassThreshold (0.35–0.5)"}. High ${(musicContext.avgHigh * 100).toFixed(0)}% → ${musicContext.avgHigh > 0.35 ? "grating on, faster movement" : "grating optional"}.`
     : "\nNo track loaded yet — give general advice until the user loads music.";
 
   const systemPrompt = `You are a world-class laser show designer and DMX programmer. You have designed shows for Super Bowl halftimes, stadium concerts, 4th of July national events, NYE Times Square, and major music festivals. Your shows are bold, unexpected, and remembered. You do not play it safe.
@@ -216,19 +255,20 @@ MODE 1 — TWEAK: user changes one thing → flat JSON with only changed fields
 
 MODE 2 — SEQUENCE: any show/scene design request → JSON with "sequence" array.
 
-──────────────── REFERENCE EXAMPLE (no labels — copy this structure exactly) ────────────────
+──────────────── REFERENCE EXAMPLE — 4th of July with lyric-sync ────────────────
+(This example shows a show timed to a song with BPM=120 and specific lyric moments. NO labels.)
 <settings>{"sequence": [
   {"durationBars": 4, "movementStyle": "sweep",     "animationStyle": "wave",      "textEnabled": false, "textContent": "", "colorIntensity": 1.3, "movementSpeed": 0.5, "patternComplexity": "simple",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.5,  "zoomEnabled": false, "patternShiftBeats": 16},
-  {"durationBars": 4, "movementStyle": "lissajous",  "animationStyle": "stars",     "textEnabled": false, "textContent": "", "colorIntensity": 1.6, "movementSpeed": 0.6, "patternComplexity": "medium",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.4,  "zoomEnabled": true,  "patternShiftBeats": 16},
-  {"durationBars": 3, "movementStyle": "step",       "animationStyle": "stars",     "textEnabled": true,  "textContent": "AMERICA", "colorIntensity": 1.9, "movementSpeed": 0.5, "patternComplexity": "simple",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.45, "zoomEnabled": false, "patternShiftBeats": 24},
-  {"durationBars": 4, "movementStyle": "bounce",     "animationStyle": "fireworks", "textEnabled": false, "textContent": "", "colorIntensity": 1.8, "movementSpeed": 0.9, "patternComplexity": "complex", "gratingEnabled": true,  "strobeEnabled": false, "bassThreshold": 0.3,  "zoomEnabled": true,  "patternShiftBeats": 8},
-  {"durationBars": 3, "movementStyle": "lissajous",  "animationStyle": "spiral",    "textEnabled": false, "textContent": "", "colorIntensity": 1.7, "movementSpeed": 0.7, "patternComplexity": "medium",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.4,  "zoomEnabled": true,  "patternShiftBeats": 8},
-  {"durationBars": 3, "movementStyle": "sweep",      "animationStyle": "fireworks", "textEnabled": true,  "textContent": "FREEDOM", "colorIntensity": 2.0, "movementSpeed": 0.6, "patternComplexity": "simple",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.35, "zoomEnabled": true,  "patternShiftBeats": 16},
-  {"durationBars": 4, "movementStyle": "step",       "animationStyle": "wave",      "textEnabled": false, "textContent": "", "colorIntensity": 1.9, "movementSpeed": 1.0, "patternComplexity": "complex", "gratingEnabled": true,  "strobeEnabled": false, "bassThreshold": 0.25, "zoomEnabled": true,  "patternShiftBeats": 8},
-  {"durationBars": 4, "movementStyle": "bounce",     "animationStyle": "fireworks", "textEnabled": true,  "textContent": "USA", "colorIntensity": 2.0, "movementSpeed": 0.7, "patternComplexity": "medium",  "gratingEnabled": true,  "strobeEnabled": true,  "bassThreshold": 0.18, "zoomEnabled": true,  "patternShiftBeats": 8}
+  {"durationBars": 4, "movementStyle": "lissajous", "animationStyle": "stars",     "textEnabled": false, "textContent": "", "colorIntensity": 1.6, "movementSpeed": 0.6, "patternComplexity": "medium",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.4,  "zoomEnabled": true,  "patternShiftBeats": 16},
+  {"durationBars": 3, "movementStyle": "bounce",    "animationStyle": "hands",     "textEnabled": true,  "textContent": "HANDS UP", "colorIntensity": 1.9, "movementSpeed": 0.6, "patternComplexity": "simple",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.35, "zoomEnabled": true,  "patternShiftBeats": 8},
+  {"durationBars": 4, "movementStyle": "step",      "animationStyle": "fireworks", "textEnabled": false, "textContent": "", "colorIntensity": 1.8, "movementSpeed": 0.9, "patternComplexity": "complex", "gratingEnabled": true,  "strobeEnabled": false, "bassThreshold": 0.3,  "zoomEnabled": true,  "patternShiftBeats": 8},
+  {"durationBars": 3, "movementStyle": "lissajous", "animationStyle": "butterfly", "textEnabled": false, "textContent": "", "colorIntensity": 1.7, "movementSpeed": 0.6, "patternComplexity": "medium",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.45, "zoomEnabled": false, "patternShiftBeats": 16},
+  {"durationBars": 3, "movementStyle": "sweep",     "animationStyle": "birds",     "textEnabled": true,  "textContent": "FLY FREE", "colorIntensity": 1.8, "movementSpeed": 0.6, "patternComplexity": "simple",  "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.4,  "zoomEnabled": false, "patternShiftBeats": 24},
+  {"durationBars": 4, "movementStyle": "step",      "animationStyle": "galaxy",    "textEnabled": false, "textContent": "", "colorIntensity": 1.9, "movementSpeed": 0.8, "patternComplexity": "complex", "gratingEnabled": true,  "strobeEnabled": false, "bassThreshold": 0.25, "zoomEnabled": true,  "patternShiftBeats": 8},
+  {"durationBars": 4, "movementStyle": "bounce",    "animationStyle": "fireworks", "textEnabled": true,  "textContent": "USA", "colorIntensity": 2.0, "movementSpeed": 0.7, "patternComplexity": "medium",  "gratingEnabled": true,  "strobeEnabled": true,  "bassThreshold": 0.18, "zoomEnabled": true,  "patternShiftBeats": 8}
 ]}</settings>
 
-What makes this correct: NO LABELS on any scene. Every animationStyle is different from neighbors. Every movementStyle rotates through all 4. Speeds stay 0.5–1.0. Text scenes use movementSpeed ≤ 0.7. Intensity builds from 1.3 → 2.0. Grating and strobe only at peaks.
+Notice: "hands" used at the "HANDS UP" lyric moment. "butterfly" and "birds" used for the flying-away section. Character animations mix with classic ones for a varied, narrative show.
 ────────────────────────────────────────────────────
 
 ═══════════════ SEQUENCE RULES — MANDATORY ═══════════════

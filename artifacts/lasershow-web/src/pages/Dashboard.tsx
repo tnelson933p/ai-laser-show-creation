@@ -1321,6 +1321,8 @@ function ShowChat({
   const setMessages = onMessagesChange;
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [lyricsText, setLyricsText] = useState("");
+  const [lyricsOpen, setLyricsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -1359,6 +1361,7 @@ function ShowChat({
           avgBass: avg(track.analysis.bass),
           avgMid:  avg(track.analysis.mid),
           avgHigh: avg(track.analysis.high),
+          lyrics: lyricsText.trim() || undefined,
         };
       })() : undefined;
 
@@ -1517,6 +1520,35 @@ function ShowChat({
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Lyrics / timestamp panel */}
+      <div className="flex-shrink-0 border-t border-zinc-900">
+        <button
+          onClick={() => setLyricsOpen(o => !o)}
+          className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+        >
+          <span className="uppercase tracking-widest">
+            🎵 Lyrics &amp; Timestamps
+            {lyricsText.trim() && <span className="ml-1.5 text-[#00ff9d]/60">● active</span>}
+          </span>
+          <span>{lyricsOpen ? "▲" : "▼"}</span>
+        </button>
+        {lyricsOpen && (
+          <div className="px-2 pb-2">
+            <p className="text-[9px] text-zinc-700 mb-1.5 leading-relaxed">
+              Paste lyrics with timestamps so the AI knows exactly when each moment happens.<br />
+              Format: <span className="text-zinc-500 font-mono">0:15 I put my hands up</span> · <span className="text-zinc-500 font-mono">0:42 butterfly flying away</span>
+            </p>
+            <textarea
+              value={lyricsText}
+              onChange={e => setLyricsText(e.target.value)}
+              placeholder={"0:00 [intro]\n0:15 I put my hands up in the air\n0:28 like a butterfly flying away\n0:45 [chorus]"}
+              rows={5}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-sm px-2 py-1.5 text-[10px] font-mono text-zinc-300 placeholder:text-zinc-700 focus:outline-none focus:border-[#00ff9d]/30 resize-none leading-relaxed"
+            />
+          </div>
+        )}
       </div>
 
       {/* Input row */}
@@ -2020,7 +2052,6 @@ function drawLaserAnimation(
     // Archimedean spiral expanding from center
     const turns = 4;
     const maxR  = R * 0.88;
-    const phase = (t * 0.5) % 1; // continuous growth
     const steps = 400;
     ctx.beginPath();
     for (let i = 0; i <= steps; i++) {
@@ -2044,6 +2075,239 @@ function drawLaserAnimation(
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.stroke();
+
+  } else if (style === "butterfly") {
+    // Butterfly gliding across — wings traced as laser paths, flapping to beat
+    const flapSpeed  = 2.2 + energy * 1.5;
+    const flapAngle  = Math.sin(t * flapSpeed) * 0.7 + 0.15; // 0..1 wing spread
+    const glideX     = cx + Math.sin(t * 0.35) * W * 0.28;
+    const glideY     = cy + Math.cos(t * 0.22) * H * 0.18;
+    const s          = R * 0.55;
+    const drawWing   = (mirrorX: number) => {
+      // Upper wing (large)
+      ctx.beginPath();
+      ctx.moveTo(glideX, glideY);
+      ctx.bezierCurveTo(
+        glideX + mirrorX * s * 0.9, glideY - s * flapAngle * 1.4,
+        glideX + mirrorX * s * 1.4, glideY - s * flapAngle * 0.3,
+        glideX + mirrorX * s * 0.8, glideY + s * 0.2,
+      );
+      ctx.bezierCurveTo(
+        glideX + mirrorX * s * 0.5, glideY + s * 0.1,
+        glideX + mirrorX * s * 0.2, glideY,
+        glideX, glideY,
+      );
+      ctx.stroke();
+      // Lower wing (smaller)
+      ctx.beginPath();
+      ctx.moveTo(glideX, glideY);
+      ctx.bezierCurveTo(
+        glideX + mirrorX * s * 0.6, glideY + s * flapAngle * 0.9,
+        glideX + mirrorX * s * 0.7, glideY + s * 0.7,
+        glideX + mirrorX * s * 0.3, glideY + s * 0.55,
+      );
+      ctx.bezierCurveTo(
+        glideX + mirrorX * s * 0.1, glideY + s * 0.35,
+        glideX, glideY + s * 0.2,
+        glideX, glideY,
+      );
+      ctx.stroke();
+    };
+    drawWing(1);
+    drawWing(-1);
+    // Body
+    ctx.beginPath();
+    ctx.moveTo(glideX, glideY - s * 0.22);
+    ctx.lineTo(glideX, glideY + s * 0.38);
+    ctx.stroke();
+    // Antennae
+    ctx.globalAlpha *= 0.7;
+    ctx.beginPath();
+    ctx.moveTo(glideX, glideY - s * 0.18);
+    ctx.quadraticCurveTo(glideX - s * 0.25, glideY - s * 0.7, glideX - s * 0.18, glideY - s * 0.9);
+    ctx.moveTo(glideX, glideY - s * 0.18);
+    ctx.quadraticCurveTo(glideX + s * 0.25, glideY - s * 0.7, glideX + s * 0.18, glideY - s * 0.9);
+    ctx.stroke();
+
+  } else if (style === "hands") {
+    // Crowd of stick figures with hands raised — laser-traced silhouettes
+    const count = 5;
+    const figH  = R * 0.65;
+    const spacing = W * 0.16;
+    const baseY = cy + R * 0.28;
+    for (let i = 0; i < count; i++) {
+      const fx   = cx + (i - (count - 1) / 2) * spacing;
+      const bob  = Math.sin(t * 2.1 + i * 1.3) * figH * 0.06 * (1 + energy * 0.5);
+      const fy   = baseY + bob;
+      const headR = figH * 0.12;
+      // Head
+      ctx.globalAlpha = 0.75 + energy * 0.2;
+      ctx.beginPath();
+      for (let p = 0; p <= 24; p++) {
+        const a = (p / 24) * Math.PI * 2;
+        const px2 = fx + Math.cos(a) * headR;
+        const py2 = fy - figH * 0.88 + Math.sin(a) * headR;
+        if (p === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      // Body
+      ctx.beginPath();
+      ctx.moveTo(fx, fy - figH * 0.72);
+      ctx.lineTo(fx, fy - figH * 0.35);
+      ctx.stroke();
+      // Arms raised in V shape
+      const armWave = Math.sin(t * 2.1 + i * 1.3 + 0.5) * 0.18;
+      ctx.beginPath();
+      ctx.moveTo(fx, fy - figH * 0.62);
+      ctx.lineTo(fx - figH * (0.38 + armWave), fy - figH * (0.88 + energy * 0.15));
+      ctx.moveTo(fx, fy - figH * 0.62);
+      ctx.lineTo(fx + figH * (0.38 + armWave), fy - figH * (0.88 + energy * 0.15));
+      ctx.stroke();
+      // Legs
+      ctx.beginPath();
+      ctx.moveTo(fx, fy - figH * 0.35);
+      ctx.lineTo(fx - figH * 0.18, fy);
+      ctx.moveTo(fx, fy - figH * 0.35);
+      ctx.lineTo(fx + figH * 0.18, fy);
+      ctx.stroke();
+    }
+
+  } else if (style === "birds") {
+    // Flock of birds in loose formation — classic M-wing silhouettes
+    const flock = [
+      { rx: 0,    ry: 0,    sz: 1.0  },
+      { rx: -0.22, ry: -0.12, sz: 0.8  },
+      { rx:  0.22, ry: -0.12, sz: 0.8  },
+      { rx: -0.40, ry:  0.05, sz: 0.65 },
+      { rx:  0.40, ry:  0.05, sz: 0.65 },
+      { rx: -0.58, ry:  0.15, sz: 0.55 },
+      { rx:  0.58, ry:  0.15, sz: 0.55 },
+    ];
+    const sweep = (Math.sin(t * 0.3) * 0.3 + 0.5) * W * 0.35;
+    const flock_cy = cy + Math.sin(t * 0.18) * H * 0.15;
+    flock.forEach(({ rx, ry, sz }, idx) => {
+      const bx    = cx + rx * W * 0.38 + sweep - W * 0.18;
+      const by    = flock_cy + ry * H * 0.25;
+      const ws    = R * 0.22 * sz;
+      const flap  = Math.sin(t * 2.8 + idx * 0.7) * 0.4 + 0.1;
+      ctx.globalAlpha = (0.55 + energy * 0.3) * sz;
+      ctx.beginPath();
+      ctx.moveTo(bx - ws, by + ws * flap);
+      ctx.quadraticCurveTo(bx - ws * 0.5, by - ws * flap * 0.8, bx, by);
+      ctx.quadraticCurveTo(bx + ws * 0.5, by - ws * flap * 0.8, bx + ws, by + ws * flap);
+      ctx.stroke();
+    });
+
+  } else if (style === "rain") {
+    // Laser rain — vertical streaks falling from top, rhythm-reactive density
+    const streakCount = Math.round(18 + energy * 22);
+    for (let i = 0; i < streakCount; i++) {
+      const seed  = i * 1.618 + 0.3;
+      const x     = ((seed % 1) * 1.1 - 0.05) * W;
+      const speed = 0.8 + (seed * 7.3 % 1) * 1.2;
+      const len   = H * (0.06 + (seed * 3.7 % 1) * 0.12);
+      const yTop  = ((t * speed * 0.4 + seed * 2.1) % 1.2 - 0.1) * H;
+      const a     = 0.25 + (seed * 5.1 % 1) * 0.55;
+      ctx.globalAlpha = a * (0.6 + energy * 0.35);
+      ctx.lineWidth   = (0.8 + (seed % 1) * 1.2) * dpr;
+      ctx.beginPath();
+      ctx.moveTo(x, yTop);
+      ctx.lineTo(x, yTop + len);
+      ctx.stroke();
+    }
+
+  } else if (style === "lightning") {
+    // Electric lightning bolts — jagged recursive paths
+    const boltCount = 2 + Math.round(energy * 2);
+    const drawBolt  = (x1: number, y1: number, x2: number, y2: number, depth: number) => {
+      if (depth === 0) {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        return;
+      }
+      const mx   = (x1 + x2) / 2 + (Math.random() - 0.5) * (Math.abs(x2 - x1) + Math.abs(y2 - y1)) * 0.45;
+      const my   = (y1 + y2) / 2 + (Math.random() - 0.5) * 40;
+      drawBolt(x1, y1, mx, my, depth - 1);
+      drawBolt(mx, my, x2, y2, depth - 1);
+      if (depth === 2 && Math.random() > 0.5) {
+        const branchX = mx + (Math.random() - 0.5) * W * 0.2;
+        const branchY = my + H * 0.15;
+        drawBolt(mx, my, branchX, branchY, 1);
+      }
+    };
+    for (let b = 0; b < boltCount; b++) {
+      const startX = cx + (b / boltCount - 0.5) * W * 0.6 + Math.sin(t + b * 2.1) * W * 0.1;
+      ctx.globalAlpha = (0.5 + energy * 0.45) * (Math.sin(t * 8.5 + b) * 0.3 + 0.7);
+      ctx.lineWidth   = (1.2 + energy * 1.5) * dpr;
+      drawBolt(startX, cy - R * 0.9, startX + (Math.random() - 0.5) * W * 0.3, cy + R * 0.9, 3);
+    }
+
+  } else if (style === "heart") {
+    // Parametric neon heart — pulses with energy / bass
+    const heartScale = R * (0.52 + energy * 0.18);
+    const pulse      = 1 + Math.sin(t * 3.2) * 0.06 * (1 + energy);
+    const steps      = 200;
+    ctx.globalAlpha  = 0.7 + energy * 0.25;
+    ctx.lineWidth    = (1.8 + energy * 1.4) * dpr;
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      const hx = cx + heartScale * pulse * 16 * Math.pow(Math.sin(angle), 3) / 17;
+      const hy = cy - heartScale * pulse * (13 * Math.cos(angle) - 5 * Math.cos(2 * angle) - 2 * Math.cos(3 * angle) - Math.cos(4 * angle)) / 17;
+      if (i === 0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    // Inner smaller heart
+    ctx.globalAlpha *= 0.4;
+    ctx.beginPath();
+    const s2 = heartScale * 0.55 * pulse;
+    for (let i = 0; i <= steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      const hx = cx + s2 * 16 * Math.pow(Math.sin(angle), 3) / 17;
+      const hy = cy - s2 * (13 * Math.cos(angle) - 5 * Math.cos(2 * angle) - 2 * Math.cos(3 * angle) - Math.cos(4 * angle)) / 17;
+      if (i === 0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+  } else if (style === "galaxy") {
+    // Galaxy — two spiral arms with orbiting star particles
+    const armCount = 2;
+    const starCount = 40 + Math.round(energy * 30);
+    const rotSpeed  = t * 0.25;
+    for (let arm = 0; arm < armCount; arm++) {
+      const armOffset = (arm / armCount) * Math.PI * 2;
+      const steps = 220;
+      ctx.globalAlpha = 0.55 + energy * 0.2;
+      ctx.lineWidth   = 1.2 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const frac  = i / steps;
+        const angle = frac * Math.PI * 5 + armOffset + rotSpeed;
+        const radius = frac * R * 0.9;
+        const px2   = cx + Math.cos(angle) * radius;
+        const py2   = cy + Math.sin(angle) * radius;
+        if (i === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+      }
+      ctx.stroke();
+    }
+    // Star particles scattered along arms
+    for (let i = 0; i < starCount; i++) {
+      const frac   = (i / starCount);
+      const angle  = frac * Math.PI * 5 + ((i % armCount) / armCount) * Math.PI * 2 + rotSpeed;
+      const radius = frac * R * 0.88 + (Math.sin(i * 7.3 + t) * R * 0.05);
+      const sx     = cx + Math.cos(angle) * radius;
+      const sy     = cy + Math.sin(angle) * radius;
+      const sr     = (1.5 + (i % 5) * 0.5) * dpr;
+      ctx.globalAlpha = (0.3 + frac * 0.5 + energy * 0.2) * (0.5 + Math.sin(i * 3.7 + t * 2) * 0.5);
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   ctx.restore();

@@ -37,7 +37,7 @@ export interface VisualState {
   // Text & animation overlays
   textEnabled: boolean;
   textContent: string;
-  animationStyle: "none" | "stars" | "fireworks" | "wave" | "spiral";
+  animationStyle: "none" | "stars" | "fireworks" | "wave" | "spiral" | "butterfly" | "hands" | "birds" | "rain" | "lightning" | "heart" | "galaxy";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ export interface SceneSettings {
   patternComplexity?: "simple" | "medium" | "complex";
   textEnabled?: boolean;
   textContent?: string;
-  animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral";
+  animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral" | "butterfly" | "hands" | "birds" | "rain" | "lightning" | "heart" | "galaxy";
 }
 
 export interface ShowOverrides {
@@ -100,7 +100,7 @@ export interface ShowOverrides {
   textEnabled?: boolean;
   textContent?: string;
   // 2D animation overlay drawn on top of Lissajous patterns
-  animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral";
+  animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral" | "butterfly" | "hands" | "birds" | "rain" | "lightning" | "heart" | "galaxy";
   // Sequenced show — array of scenes that auto-advance during playback
   sequence?: SceneSettings[];
   // Music transition commands (consumed and cleared by Dashboard)
