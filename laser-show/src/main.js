@@ -275,17 +275,45 @@ function drawPreview() {
 }
 
 // ── Serial port helpers ───────────────────────────────────────────────────────
+const noPortsHelp  = $('no-ports-help');
+const manualPort   = $('manual-port');
+const ftdiLink     = $('ftdi-link');
+
+if (ftdiLink) {
+  ftdiLink.addEventListener('click', e => {
+    e.preventDefault();
+    window.__TAURI__.shell.open('https://ftdichip.com/drivers/vcp-drivers/');
+  });
+}
+
+if (manualPort) {
+  manualPort.addEventListener('input', () => {
+    btnConnect.disabled = !manualPort.value.trim() && !comPort.value;
+  });
+}
+
 async function loadPorts(selectEl) {
   try {
     const ports = await invoke('list_serial_ports');
-    selectEl.innerHTML = ports.length
-      ? ports.map(p => `<option value="${p}">${p}</option>`).join('')
-      : '<option value="">No ports found</option>';
-    btnConnect.disabled = ports.length === 0;
+    if (ports.length > 0) {
+      selectEl.innerHTML = ports.map(p => `<option value="${p}">${p}</option>`).join('');
+      if (noPortsHelp) noPortsHelp.classList.add('hidden');
+      btnConnect.disabled = false;
+    } else {
+      selectEl.innerHTML = '<option value="">No ports detected — see below</option>';
+      if (noPortsHelp) noPortsHelp.classList.remove('hidden');
+      // Keep connect enabled if user already typed a manual port
+      btnConnect.disabled = !manualPort?.value.trim();
+    }
   } catch {
     selectEl.innerHTML = '<option value="">Error scanning ports</option>';
-    btnConnect.disabled = false;
+    if (noPortsHelp) noPortsHelp.classList.remove('hidden');
+    btnConnect.disabled = !manualPort?.value.trim();
   }
+}
+
+function resolvePort() {
+  return manualPort?.value.trim() || comPort.value;
 }
 
 // ── Channel display ───────────────────────────────────────────────────────────
@@ -498,7 +526,7 @@ refreshPorts.addEventListener('click', () => loadPorts(comPort));
 
 // ── Connect ───────────────────────────────────────────────────────────────────
 btnConnect.addEventListener('click', async () => {
-  const port  = comPort.value;
+  const port  = resolvePort();
   const brand = brandSelect.value;
   const model = modelSelect.value;
   if (!port) return;

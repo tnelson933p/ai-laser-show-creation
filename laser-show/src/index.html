@@ -86,6 +86,28 @@
           </div>
         </label>
 
+        <div id="no-ports-help" class="no-ports-help hidden">
+          <div class="no-ports-driver-hint">
+            <strong>No serial ports detected.</strong> Your adapter is connected via USB but the
+            serial driver hasn't loaded yet. Fix:
+            <ul>
+              <li><strong>ENTTEC Pro / SoundSwitch:</strong> Install the FTDI VCP driver →
+                <a href="#" id="ftdi-link">ftdichip.com/drivers/vcp-drivers</a>
+              </li>
+              <li><strong>Generic USB-DMX (CH340/CH341):</strong> Install CH341SER driver →
+                search "CH341SER driver" for your OS
+              </li>
+              <li>After installing the driver, unplug and replug the adapter, then click Rescan.</li>
+            </ul>
+          </div>
+          <label class="manual-port-label">
+            <span>Or enter port name manually:</span>
+            <input id="manual-port" type="text"
+              placeholder="Windows: COM3  |  macOS: /dev/cu.usbserial-XXXX  |  Linux: /dev/ttyUSB0"
+              class="manual-port-input" />
+          </label>
+        </div>
+
         <div id="connect-error" class="error-msg hidden"></div>
 
         <button id="btn-connect" class="btn-primary" disabled>

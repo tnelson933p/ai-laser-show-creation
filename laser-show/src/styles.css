@@ -159,6 +159,65 @@ select option { background: var(--surface2); }
 
 .hidden { display: none !important; }
 
+/* ── No-ports help panel ──────────────────────────────────────────────────── */
+.no-ports-help {
+  background: rgba(255, 205, 86, .07);
+  border: 1px solid rgba(255, 205, 86, .25);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.no-ports-driver-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.no-ports-driver-hint strong { color: var(--yellow); }
+
+.no-ports-driver-hint ul {
+  margin: 8px 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.no-ports-driver-hint a {
+  color: var(--accent2);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.manual-port-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.manual-port-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 8px 10px;
+  width: 100%;
+  font-family: 'Courier New', monospace;
+  transition: border-color .15s;
+}
+
+.manual-port-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.manual-port-input::placeholder { color: var(--muted); opacity: .6; }
+
 /* ── App layout ───────────────────────────────────────────────────────────── */
 .app {
   display: grid;
