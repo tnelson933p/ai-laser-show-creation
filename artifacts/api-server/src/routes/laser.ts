@@ -61,7 +61,7 @@ Keep the response focused, expert-level, and under 300 words. Use specific numbe
 
   try {
     const stream = await openai.chat.completions.create({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       max_completion_tokens: 600,
       messages: [
         { role: "system", content: systemPrompt },
@@ -147,7 +147,7 @@ CURRENT TRACK (loaded in the show):
 Use the BPM to set patternShiftBeats (e.g. 8 or 16 beats per pattern change), and use the energy signature to decide how aggressive the bass threshold and zoom settings should be. A high bass percentage means the track is bass-heavy — lower the bassThreshold and enable zoom snaps. High treble means enable grating and faster movement.`
     : "\nNo track loaded yet — give general advice until the user loads music.";
 
-  const systemPrompt = `You are an expert laser show programmer and show director with 20+ years of professional experience. You are working interactively with the user to design and refine a music-synchronized laser show for a specific fixture.
+  const systemPrompt = `You are an expert laser show programmer and show director with 20+ years of professional experience. You design music-synchronized laser shows in real-time with the user.
 
 Laser fixture: ${laser.brand} ${laser.model}
 DMX channels: ${laser.channelCount} | Color: ${laser.colorMode} | Scanner: ${laser.scanTier}
@@ -157,35 +157,49 @@ ${musicSection}
 
 ${settingsDoc}
 
+═══════════════════════════════════════════════════════
+OUTPUT FORMAT — THIS IS MANDATORY, NO EXCEPTIONS
+═══════════════════════════════════════════════════════
+
+Every single response you write MUST end with a <settings> XML block containing a JSON object.
+This is not optional. This is not situational. EVERY response. Always.
+
+The block looks exactly like this:
+<settings>{"movementStyle": "bounce", "colorIntensity": 1.8, "bassThreshold": 0.3}</settings>
+
+RULES:
+1. The block must appear at the very end of your reply — after all prose.
+2. The content inside <settings>...</settings> must be valid JSON (double-quoted keys and string values).
+3. Include EVERY key you want active — not just the ones you changed. If you want to keep a previous setting, repeat it.
+4. Do NOT write "Here are the settings:" or list them as bullet points. Output the XML block directly.
+5. Do NOT wrap the block in markdown code fences (no \`\`\`).
+6. Minimum 4 keys per block.
+
+BAD (never do this):
+  Here are the initial settings I'm proposing:
+  ✓ Updated: movementStyle, colorIntensity, bassThreshold
+
+GOOD (always do this):
+  Switching to bounce movement and boosting color intensity for the drop.
+  <settings>{"movementStyle": "bounce", "colorIntensity": 1.8, "bassThreshold": 0.3, "patternComplexity": "medium"}</settings>
+
+═══════════════════════════════════════════════════════
+
 YOUR ROLE:
-- Have a natural, expert back-and-forth conversation about the show
-- ALWAYS emit a <settings> JSON block at the end of EVERY reply — even when planning, describing, or saying what you WILL do. If you describe a show, apply it immediately. Never just talk about settings without applying them.
-- When the user asks you to "plan a show", "create a show", "design a show", or "make a show for this track": design it AND immediately apply the settings. Do not say "I would do X" — do X.
-- When the user says they like something, acknowledge it and keep those settings
-- Be concise: 1-3 sentences of natural language, then the <settings> block
-- Reference specific DMX values, Lissajous ratios, KPPS limits, and timing when relevant
-- Always explain what you changed and why in the text, then apply it in the block
+- 1–3 sentences of expert commentary, then the <settings> block. Nothing else.
+- When the user asks to "plan", "create", "design", or "make" a show — design it AND apply settings immediately.
+- Never say "I would do X" — just do X in the block.
+- Do not invent features that don't exist. The only controllable parameters are the ones listed in ADJUSTABLE SHOW PARAMETERS above. There is no text rendering, no image display, no video, no special effects beyond what is listed.
 
-CRITICAL RULE: Every single response must end with a <settings> block. No exceptions. If you have nothing new to change, repeat the current settings.
-
-SETTINGS BLOCK FORMAT (only include keys you want to change, always include at minimum 3-4 keys):
-<settings>{"key": value, "key2": value2}</settings>
-
-Examples of valid user requests:
-"Make the bass more aggressive" → lower bassThreshold, set zoomEnabled true
-"I hate the strobe" → set strobeEnabled false
-"Move faster" → increase movementSpeed
-"The colors are too dim" → increase colorIntensity
-"Keep it simple" → set patternComplexity "simple", movementStyle "sweep"
-"Make it hypnotic and slow" → set movementSpeed 0.6, movementStyle "lissajous", patternShiftBeats 32
-"Fade out the music" → set audioAction "fadeOut" (optionally fadeSeconds 3)
-"Cut the music now / hard cut" → set audioAction "cut"
-"Fade in the music" → set audioAction "fadeIn" (optionally fadeSeconds 2)
-"Crossfade to next track" → set audioAction "fadeOut", fadeSeconds 4 (user should load next track after fade)
+VALID SETTINGS EXAMPLES:
+"Make the bass aggressive" → {"bassThreshold": 0.2, "zoomEnabled": true, "movementSpeed": 1.5, "patternShiftBeats": 8}
+"Slow, hypnotic" → {"movementSpeed": 0.5, "movementStyle": "lissajous", "patternShiftBeats": 32, "colorIntensity": 1.2}
+"Strobe on peaks" → {"strobeEnabled": true, "bassThreshold": 0.4, "movementSpeed": 1.0, "patternComplexity": "complex"}
+"Red, white, blue theme" → {"colorIntensity": 1.8, "movementStyle": "bounce", "patternShiftBeats": 8, "gratingEnabled": true}
+"Fade out music" → {"audioAction": "fadeOut", "fadeSeconds": 3, "movementSpeed": 0.8, "patternShiftBeats": 16}
 
 MUSIC TRANSITION NOTES:
-- audioAction is consumed once and cleared — do not set it unless the user is explicitly asking for a music transition
-- For live show flow, recommend fade-outs between songs rather than hard cuts unless the user specifies
+- audioAction is consumed once and cleared — only set it when the user explicitly requests a fade/cut
 - fadeSeconds defaults to 3 if not specified`;
 
   const chatMessages: ChatCompletionMessageParam[] = [
@@ -195,8 +209,8 @@ MUSIC TRANSITION NOTES:
 
   try {
     const stream = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      max_tokens: 400,
+      model: "gpt-4o",
+      max_tokens: 500,
       messages: chatMessages,
       stream: true,
     });

@@ -1167,11 +1167,16 @@ export default function Dashboard() {
 // ─────────────────────────────────────────────────────────────────────────────
 function parseSettingsBlock(text: string): { display: string; settings: ShowOverrides | null } {
   const match = text.match(/<settings>([\s\S]*?)<\/settings>/);
-  if (!match) return { display: text, settings: null };
+  if (!match) {
+    console.debug("[ShowChat] No <settings> block found in AI response. Raw tail:", text.slice(-200));
+    return { display: text, settings: null };
+  }
   try {
     const settings = JSON.parse(match[1]) as ShowOverrides;
+    console.debug("[ShowChat] Settings parsed OK:", settings);
     return { display: text.replace(/<settings>[\s\S]*?<\/settings>/, "").trim(), settings };
-  } catch {
+  } catch (e) {
+    console.warn("[ShowChat] <settings> block found but JSON is invalid:", match[1], e);
     return { display: text.replace(/<settings>[\s\S]*?<\/settings>/, "").trim(), settings: null };
   }
 }
@@ -1296,6 +1301,7 @@ function ShowChat({
       }
 
       // Final pass — parse and apply settings
+      console.debug("[ShowChat] Full accumulated response:", accumulated);
       const { display, settings } = parseSettingsBlock(accumulated);
       const finalDisplay = display || accumulated;
 
@@ -1307,6 +1313,7 @@ function ShowChat({
           return next;
         });
       } else if (settings) {
+        console.debug("[ShowChat] Applying overrides:", settings);
         const merged = { ...overrides, ...settings };
         onOverridesChange(merged);
         setMessages(prev => {
