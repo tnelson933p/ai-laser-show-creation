@@ -626,15 +626,25 @@ export const LASER_DATABASE: LaserModel[] = [
     scanTier: "mid",
     colorMode: "rgb-full",
     availableColors: ["Red", "Green", "Blue"],
-    maxPowerMw: 300,
-    builtInPatterns: 32,
+    maxPowerMw: 2000,
+    builtInPatterns: 200,
     scanAngleDeg: 45,
-    specialFeatures: ["16-ch full DMX control", "Stand-alone mode", "Sound active mode"],
+    specialFeatures: [
+      "2W total RGB (Red 450mW · Green 350mW · Blue 1200mW)",
+      "Blue-dominant output — cyan/blue/violet appear brightest",
+      "200+ built-in 3D animations & aerial geometry patterns",
+      "50 holiday/Christmas themed patterns",
+      "16-ch full DMX512 In/Out",
+      "Bluetooth Light Elf app — custom text, freehand drawing, 20-scene show builder",
+      "Sound-active / mic mode",
+      "Master/Slave daisy-chain via DMX",
+      "Auto mode (standalone loop)",
+    ],
     strategy: {
       ...RGB_STRATEGY,
       movementStyle: "lissajous",
       patternShiftBeats: 8,
-      notes: "EY003-L reference laser for this system. Full 16-ch control with a clean RGB matrix. Lock CH1 to 120 (DMX remote control mode) at all times. Grating effects (CH15-16) are highly visible — use them from 65% average energy upwards. Standard BPM-locked Lissajous on X/Y with rotation at 1/2 BPM for a layered movement effect."
+      notes: "EY003-L — 2W total RGB (R 450mW / G 350mW / B 1200mW). Blue diode is 60% of total power, so pure blue beams are strikingly bright while red is the weakest color — push red intensity higher to compensate. Lock CH1 to 120 (DMX remote control mode) at all times. Grating effects (CH15-16) are highly visible — engage from 65% average energy upward. Standard BPM-locked Lissajous on X/Y with rotation at 1/2 BPM. Scanner is mid-tier (~15 KPPS): keep Lissajous ratios at 1:1, 2:1, 3:2 for clean shapes — avoid 5:4 or higher which may flicker at this scanner speed. At 2W the beams are visible overhead without haze but benefit significantly from light fog/haze. High energy sections fully support grating fan-out across the room."
     }
   },
   {

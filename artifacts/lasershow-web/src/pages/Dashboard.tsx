@@ -1357,6 +1357,8 @@ function ShowChat({
             scanTier: laser.scanTier,
             availableColors: laser.availableColors,
             specialFeatures: laser.specialFeatures,
+            maxPowerMw: laser.maxPowerMw,
+            notes: laser.strategy?.notes ?? "",
           },
           messages: updatedMsgs.map(m => ({ role: m.role, content: m.content })),
           currentSettings: overrides,

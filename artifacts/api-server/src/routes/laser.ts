@@ -98,6 +98,7 @@ router.post("/laser/chat", async (req, res) => {
       brand: string; model: string; channelCount: number;
       colorMode: string; scanTier: string;
       availableColors: string[]; specialFeatures: string[];
+      maxPowerMw?: number; notes?: string;
     };
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     currentSettings: Record<string, unknown>;
@@ -202,7 +203,8 @@ Use the BPM to set patternShiftBeats (e.g. 8 or 16 beats per pattern change), an
 Laser fixture: ${laser.brand} ${laser.model}
 DMX channels: ${laser.channelCount} | Color: ${laser.colorMode} | Scanner: ${laser.scanTier}
 Colors available: ${(laser.availableColors ?? []).join(", ")}
-Features: ${(laser.specialFeatures ?? []).join(", ") || "standard"}
+Fixture notes: ${(laser.notes as string | undefined) ?? ""}
+Features: ${(laser.specialFeatures ?? []).join(" | ") || "standard"}
 ${musicSection}
 
 ${settingsDoc}
