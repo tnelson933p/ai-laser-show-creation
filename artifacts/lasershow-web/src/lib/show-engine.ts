@@ -68,6 +68,24 @@ const PRO_PATTERN_POOL    = LISSAJOUS_PRESETS.map((_, i) => i);
 // Runtime overrides — set by the AI chat to modify show behaviour live
 // ─────────────────────────────────────────────────────────────────────────────
 
+// A single scene in a sequenced show — all override fields + timing metadata
+export interface SceneSettings {
+  label?: string;            // display name, e.g. "INTRO", "DROP", "FINALE"
+  durationBars: number;      // how many 4/4 bars this scene lasts
+  patternShiftBeats?: number;
+  bassThreshold?: number;
+  strobeEnabled?: boolean;
+  zoomEnabled?: boolean;
+  movementStyle?: "lissajous" | "sweep" | "bounce" | "step";
+  colorIntensity?: number;
+  movementSpeed?: number;
+  gratingEnabled?: boolean;
+  patternComplexity?: "simple" | "medium" | "complex";
+  textEnabled?: boolean;
+  textContent?: string;
+  animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral";
+}
+
 export interface ShowOverrides {
   patternShiftBeats?: number;
   bassThreshold?: number;
@@ -83,6 +101,8 @@ export interface ShowOverrides {
   textContent?: string;
   // 2D animation overlay drawn on top of Lissajous patterns
   animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral";
+  // Sequenced show — array of scenes that auto-advance during playback
+  sequence?: SceneSettings[];
   // Music transition commands (consumed and cleared by Dashboard)
   audioAction?: "fadeOut" | "fadeIn" | "cut";
   fadeSeconds?: number;      // duration for fade in/out (default 3)

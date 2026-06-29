@@ -8,7 +8,7 @@ import {
   LASER_BRANDS, LASER_DATABASE, getLaserByBrandModel,
   type LaserModel,
 } from "@/lib/laser-database";
-import { ShowEngine, LISSAJOUS_PRESETS, type VisualState, type ShowOverrides } from "@/lib/show-engine";
+import { ShowEngine, LISSAJOUS_PRESETS, type VisualState, type ShowOverrides, type SceneSettings } from "@/lib/show-engine";
 import {
   type ChatMessage, type ShowSave, loadLibrary, saveLibrary,
 } from "@/lib/show-library";
@@ -73,11 +73,33 @@ export default function Dashboard() {
   const visualStateRef = useRef<VisualState | null>(null);
   const [showOverrides, setShowOverrides] = useState<ShowOverrides>({});
   const showOverridesRef = useRef<ShowOverrides>({});
+
+  // Show sequencer — AI-defined scenes that auto-advance during playback
+  const sequenceRef = useRef<SceneSettings[]>([]);
+  const [showSequence, setShowSequence] = useState<SceneSettings[]>([]);
+  const [activeSceneIdx, setActiveSceneIdx] = useState<number>(-1);
+  const lastActiveSceneRef = useRef<SceneSettings | null>(null);
+  // Shared with LaserCanvas (ref so canvas reads it without re-renders)
+  const activeSceneDisplayRef = useRef<{ label: string; changedAt: number } | null>(null);
+
   // Synchronous updater — updates the ref immediately so the 40Hz loops never
   // read a stale override (don't rely on React's async render cycle for this).
   const applyOverrides = (next: ShowOverrides) => {
-    showOverridesRef.current = next;
-    setShowOverrides(next);
+    const { sequence, ...rest } = next;
+    if (sequence !== undefined) {
+      sequenceRef.current = sequence;
+      setShowSequence(sequence);
+      lastActiveSceneRef.current = null; // force scene re-detection on next loop
+    } else if (Object.keys(next).length === 0) {
+      // Full reset — clear sequence too
+      sequenceRef.current = [];
+      setShowSequence([]);
+      setActiveSceneIdx(-1);
+      activeSceneDisplayRef.current = null;
+      lastActiveSceneRef.current = null;
+    }
+    showOverridesRef.current = rest;
+    setShowOverrides(rest);
   };
 
   // Music transitions
@@ -357,7 +379,38 @@ export default function Dashboard() {
 
     setCurrentEnvelopes({ bass, mid, high });
 
-    const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: elapsed }, showOverridesRef.current);
+    // ── Sequencer: find the active scene and merge its overrides ─────────
+    let activeOverrides: ShowOverrides = showOverridesRef.current;
+    const seq = sequenceRef.current;
+    if (seq.length > 0) {
+      const barDuration = (60 / bpm) * 4; // 4/4 time
+      const currentBar = Math.floor(elapsed / barDuration);
+      let cumBars = 0;
+      let activeScene: SceneSettings | null = null;
+      let sceneIdx = 0;
+      for (let i = 0; i < seq.length; i++) {
+        cumBars += seq[i].durationBars;
+        if (currentBar < cumBars) { activeScene = seq[i]; sceneIdx = i; break; }
+      }
+      // After all scenes end — hold the last scene
+      if (!activeScene) { activeScene = seq[seq.length - 1]; sceneIdx = seq.length - 1; }
+
+      // Detect scene change → update display ref + React state for timeline UI
+      if (activeScene !== lastActiveSceneRef.current) {
+        lastActiveSceneRef.current = activeScene;
+        activeSceneDisplayRef.current = {
+          label: activeScene.label ?? `SCENE ${sceneIdx + 1}`,
+          changedAt: performance.now(),
+        };
+        setActiveSceneIdx(sceneIdx);
+      }
+
+      const { durationBars: _d, label: _l, ...sceneOverrides } = activeScene;
+      // Scene settings fully replace base overrides for every field it defines
+      activeOverrides = { ...showOverridesRef.current, ...sceneOverrides };
+    }
+
+    const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: elapsed }, activeOverrides);
     setDmxOutput(result.channels);
     visualStateRef.current = result.visualState;
 
@@ -964,9 +1017,37 @@ export default function Dashboard() {
               isPlaying={isPlaying}
               laser={laser}
               analyser={analyserRef.current}
+              activeSceneDisplayRef={activeSceneDisplayRef}
             />
           </CardContent>
         </Card>
+
+        {/* ── Scene Sequence Timeline ──────────────────────────────────── */}
+        {showSequence.length > 0 && (
+          <div className="border border-zinc-800/60 rounded-lg bg-[#08080f] px-4 py-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Zap className="w-3 h-3 text-[#00ff9d]" />
+              <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Show Sequence · {showSequence.length} scenes · auto-advances during playback</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {showSequence.map((scene, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2.5 py-1 rounded-sm border font-mono text-[10px] uppercase tracking-wider transition-all",
+                    i === activeSceneIdx
+                      ? "border-[#00ff9d]/60 bg-[#00ff9d]/10 text-[#00ff9d]"
+                      : "border-zinc-800 text-zinc-600"
+                  )}
+                >
+                  {i === activeSceneIdx && <span className="w-1.5 h-1.5 rounded-full bg-[#00ff9d] animate-pulse" />}
+                  <span>{scene.label ?? `Scene ${i + 1}`}</span>
+                  <span className="text-zinc-700">{scene.durationBars}b</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── Show Timeline / Scrubber ─────────────────────────────────── */}
         {track && (
@@ -1401,9 +1482,10 @@ interface LaserCanvasProps {
   isPlaying: boolean;
   laser: LaserModel | null;
   analyser: AnalyserNode | null;
+  activeSceneDisplayRef: React.MutableRefObject<{ label: string; changedAt: number } | null>;
 }
 
-function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvasProps) {
+function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDisplayRef }: LaserCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const trailBufferRef = useRef<ImageData | null>(null);
@@ -1574,6 +1656,30 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvas
           ctx.fill();
         }
         ctx.restore();
+      }
+
+      // ── Scene flash: name shown briefly when scene changes ───────────
+      const sceneDisplay = activeSceneDisplayRef.current;
+      if (sceneDisplay && isPlaying) {
+        const age = performance.now() - sceneDisplay.changedAt;
+        const SHOW_MS = 2200;
+        if (age < SHOW_MS) {
+          const dpr = window.devicePixelRatio;
+          const fadeIn  = Math.min(1, age / 200);
+          const fadeOut = age > SHOW_MS - 400 ? (SHOW_MS - age) / 400 : 1;
+          const alpha   = fadeIn * fadeOut * 0.95;
+          const fontSize = Math.min(W, H) * 0.10;
+          ctx.save();
+          ctx.font = `900 ${fontSize}px "Arial Black", Impact, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.shadowBlur = 30 * dpr;
+          ctx.shadowColor = "#00ff9d";
+          ctx.fillStyle = "#00ff9d";
+          ctx.globalAlpha = alpha;
+          ctx.fillText(sceneDisplay.label.toUpperCase(), cx, H * 0.12);
+          ctx.restore();
+        }
       }
 
       // State label — bottom-right corner

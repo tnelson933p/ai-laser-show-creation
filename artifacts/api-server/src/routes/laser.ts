@@ -211,26 +211,43 @@ ${settingsDoc}
 OUTPUT FORMAT — MANDATORY, NO EXCEPTIONS EVER
 ═══════════════════════════════════════════════════════
 
-Every single response MUST end with one <settings> XML block. Always. No exceptions.
+Every response MUST end with exactly one <settings> XML block containing valid JSON.
 
-Format:
-<settings>{"key": value, "key2": value2}</settings>
+TWO MODES — choose the right one:
 
-HARD RULES:
+────────────────────────────────────────────────────
+MODE 1: SINGLE TWEAK (one-off adjustment)
+Use when: user asks to change one thing ("make it faster", "kill the strobe", "add fireworks")
+Format: flat JSON object with the settings to apply
+<settings>{"movementStyle": "bounce", "colorIntensity": 1.8, "strobeEnabled": true, "gratingEnabled": true, "movementSpeed": 1.5, "patternShiftBeats": 8}</settings>
+────────────────────────────────────────────────────
+MODE 2: FULL SHOW SEQUENCE (REQUIRED for any show design request)
+Use when: user asks to "make a show", "design a show", "create a 4th of July show", "plan a show", or wants the show to change and evolve
+Format: JSON object with a "sequence" array — EACH SCENE IS COMPLETELY DIFFERENT
+
+<settings>{"sequence": [
+  {"label": "INTRO", "durationBars": 8, "movementStyle": "lissajous", "animationStyle": "wave", "textEnabled": false, "colorIntensity": 1.2, "movementSpeed": 0.6, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.5, "zoomEnabled": false, "patternShiftBeats": 32},
+  {"label": "BUILD", "durationBars": 16, "movementStyle": "sweep", "animationStyle": "spiral", "textEnabled": false, "colorIntensity": 1.6, "movementSpeed": 1.2, "patternComplexity": "medium", "gratingEnabled": true, "strobeEnabled": false, "bassThreshold": 0.35, "zoomEnabled": true, "patternShiftBeats": 16},
+  {"label": "DROP", "durationBars": 8, "movementStyle": "bounce", "animationStyle": "fireworks", "textEnabled": true, "textContent": "HAPPY 4TH", "colorIntensity": 2.0, "movementSpeed": 2.0, "patternComplexity": "complex", "gratingEnabled": true, "strobeEnabled": true, "bassThreshold": 0.15, "zoomEnabled": true, "patternShiftBeats": 4},
+  {"label": "STARS", "durationBars": 12, "movementStyle": "step", "animationStyle": "stars", "textEnabled": false, "colorIntensity": 1.9, "movementSpeed": 1.4, "patternComplexity": "medium", "gratingEnabled": true, "strobeEnabled": false, "bassThreshold": 0.25, "zoomEnabled": true, "patternShiftBeats": 8},
+  {"label": "AMERICA", "durationBars": 8, "movementStyle": "sweep", "animationStyle": "none", "textEnabled": true, "textContent": "AMERICA", "colorIntensity": 2.0, "movementSpeed": 0.8, "patternComplexity": "simple", "gratingEnabled": false, "strobeEnabled": false, "bassThreshold": 0.45, "zoomEnabled": false, "patternShiftBeats": 16},
+  {"label": "FINALE", "durationBars": 16, "movementStyle": "bounce", "animationStyle": "fireworks", "textEnabled": true, "textContent": "USA", "colorIntensity": 2.0, "movementSpeed": 2.5, "patternComplexity": "complex", "gratingEnabled": true, "strobeEnabled": true, "bassThreshold": 0.12, "zoomEnabled": true, "patternShiftBeats": 4}
+]}</settings>
+────────────────────────────────────────────────────
+
+SEQUENCE RULES — follow these exactly:
+1. Each scene object MUST include: label, durationBars, and ALL 11 override fields (movementStyle, animationStyle, textEnabled, textContent, colorIntensity, movementSpeed, patternComplexity, gratingEnabled, strobeEnabled, bassThreshold, zoomEnabled, patternShiftBeats).
+2. Every scene MUST be visually RADICALLY DIFFERENT from adjacent scenes. No two consecutive scenes can have the same movementStyle AND animationStyle.
+3. Minimum 5 scenes. Maximum 10. Typical: 6–8 for a full song.
+4. Use durationBars to match song structure: intro=8, verse=16, chorus=8, bridge=12, drop=4-8, finale=16.
+5. The sequencer auto-advances through scenes during playback — the audience sees completely different visuals every section.
+6. Vary EVERYTHING across scenes: use all 4 movementStyles, all 4 animationStyles, mix text scenes with no-text scenes.
+
+HARD RULES FOR BOTH MODES:
 1. Block goes at the very end, after all prose.
-2. Content must be valid JSON — double-quoted strings, no trailing commas.
-3. Include ALL settings you want active (not just changed ones). Omitted keys revert to defaults.
-4. Never list settings as bullet points or "✓ Updated:" text — emit the XML block only.
-5. No markdown code fences around the block.
-6. Always include at least 6 keys.
-
-BAD — never do this:
-  Here are the settings I recommend:
-  ✓ Updated: movementStyle, colorIntensity
-
-GOOD — always do this:
-  Punching up the intensity for the drop — sweep movement will fan out across the room, grating fans fire on every peak.
-  <settings>{"movementStyle": "sweep", "colorIntensity": 1.9, "bassThreshold": 0.2, "zoomEnabled": true, "gratingEnabled": true, "patternShiftBeats": 8, "movementSpeed": 1.6, "strobeEnabled": true, "patternComplexity": "complex"}</settings>
+2. Valid JSON only — double-quoted strings, no trailing commas.
+3. No markdown code fences. No "✓ Updated:" lists.
+4. The <settings> block IS the show — no separate prose description of the sequence.
 
 ═══════════════════════════════════════════════════════
 
@@ -285,7 +302,7 @@ fadeSeconds — duration of fade (default 3)`;
   try {
     const stream = await openai.chat.completions.create({
       model: "gpt-4o",
-      max_tokens: 500,
+      max_tokens: 1800,
       messages: chatMessages,
       stream: true,
     });
