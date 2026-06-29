@@ -331,7 +331,24 @@ export default function Dashboard() {
     if (!track) return;
     const clamped = Math.max(0, Math.min(seconds, track.analysis.duration - 0.05));
     pausedAtRef.current = clamped;
-    setCurrentFrame(Math.floor(clamped * 40));
+    const frameIndex = Math.min(Math.floor(clamped * 40), track.analysis.bass.length - 1);
+    setCurrentFrame(frameIndex);
+
+    // Compute the show engine output at this exact frame so the preview updates immediately
+    if (engineRef.current) {
+      const bass = track.analysis.bass[frameIndex] || 0;
+      const mid  = track.analysis.mid[frameIndex]  || 0;
+      const high = track.analysis.high[frameIndex] || 0;
+      const bpm  = track.analysis.bpm;
+      const result = engineRef.current.compute(
+        { bass, mid, high, bpm, timeS: clamped },
+        showOverridesRef.current,
+      );
+      visualStateRef.current = result.visualState;
+      setDmxOutput(result.channels);
+      setCurrentEnvelopes({ bass, mid, high });
+    }
+
     if (isPlaying) {
       sourceNodeRef.current?.stop();
       sourceNodeRef.current?.disconnect();
@@ -1116,7 +1133,7 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvas
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
 
-      if (!isPlaying || !vs) {
+      if (!vs) {
         // Idle animation — slow spinning circle in the laser's color
         idlePhaseRef.current += 0.008;
         const t = idlePhaseRef.current;
