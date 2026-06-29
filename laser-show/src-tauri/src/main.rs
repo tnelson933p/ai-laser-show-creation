@@ -18,13 +18,19 @@ use tauri::State;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Shared application state
+//
+// playback_running and current_frame are Arc-wrapped so the DMX/audio threads
+// can hold their own clone and read/write the same underlying atomic.
+// Previously these were plain AtomicBool/AtomicU64 on AppState; the thread
+// clones were local Arcs the stop command could never reach, so stop() had no
+// effect and get_current_envelopes always returned frame 0.
 // ──────────────────────────────────────────────────────────────────────────────
 
 struct AppState {
     dmx: DmxController,
     audio: Mutex<Option<Arc<AudioData>>>,
-    playback_running: AtomicBool,
-    current_frame: AtomicU64,
+    playback_running: Arc<AtomicBool>,
+    current_frame: Arc<AtomicU64>,
     profile: Mutex<LaserProfile>,
 }
 
@@ -33,8 +39,8 @@ impl AppState {
         AppState {
             dmx: DmxController::new(),
             audio: Mutex::new(None),
-            playback_running: AtomicBool::new(false),
-            current_frame: AtomicU64::new(0),
+            playback_running: Arc::new(AtomicBool::new(false)),
+            current_frame: Arc::new(AtomicU64::new(0)),
             profile: Mutex::new(LaserProfile::EytseEY003L),
         }
     }
@@ -49,9 +55,10 @@ fn list_serial_ports() -> Vec<String> {
     DmxController::list_ports()
 }
 
-/// `cable_type` must be either `"enttec-pro"` or `"raw"`.
-/// ENTTEC Pro / SoundSwitch adapters: 57600 baud, 1 stop bit, ENTTEC envelope.
-/// Generic Open DMX / raw adapters:   250000 baud, 2 stop bits, BREAK + data.
+/// `cable_type` — `"enttec-pro"` (default) or `"raw"`.
+///
+/// ENTTEC Pro / SoundSwitch: 57 600 baud, 1 stop bit, ENTTEC USB Pro envelope.
+/// Generic Open DMX / raw:   250 000 baud, 2 stop bits, hardware BREAK + data.
 #[tauri::command]
 fn connect_dmx(port: String, cable_type: String, state: State<AppState>) -> Result<(), String> {
     let ct = match cable_type.as_str() {
@@ -98,6 +105,8 @@ async fn load_audio(
 fn get_current_envelopes(state: State<AppState>) -> Option<serde_json::Value> {
     let guard = state.audio.lock();
     let audio = guard.as_ref()?;
+    // current_frame is written by the DMX thread via Arc::clone — reads here
+    // always see the real playback position.
     let frame = state.current_frame.load(Ordering::Relaxed) as usize;
     let frame = frame.min(audio.envelopes.len().saturating_sub(1));
     let env = &audio.envelopes[frame];
@@ -128,23 +137,25 @@ fn start_playback(
         }
     };
 
-    let running = Arc::new(AtomicBool::new(true));
-    let frame_counter = Arc::new(AtomicU64::new(0));
+    // Clone the Arc handles so the background threads share the exact same
+    // atomic values that stop_playback() and get_current_envelopes() read.
+    let running = Arc::clone(&state.playback_running);
+    let frame_arc = Arc::clone(&state.current_frame);
 
-    // Clone the full DmxController so the DMX thread owns it and can call
-    // send_packet() — which handles BREAK generation and ENTTEC framing.
+    // Clone the full DmxController (Arc-backed, cheap) so the DMX thread
+    // calls send_packet() which handles BREAK generation / ENTTEC framing.
     let dmx = state.dmx.clone();
     let profile = state.profile.lock().clone();
-    let running_clone = Arc::clone(&running);
-    let frame_clone = Arc::clone(&frame_counter);
     let audio_clone = Arc::clone(&audio);
 
     state.playback_running.store(true, Ordering::Relaxed);
+    state.current_frame.store(0, Ordering::Relaxed);
 
     // ── Audio playback thread (rodio) ──────────────────────────────────────
     let samples = audio.samples.clone();
     let sample_rate = audio.analysis.sample_rate;
-    let _audio_thread = std::thread::spawn(move || {
+    let running_audio = Arc::clone(&running);
+    std::thread::spawn(move || {
         use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
         let (_stream, stream_handle) = match OutputStream::try_default() {
             Ok(v) => v,
@@ -156,7 +167,14 @@ fn start_playback(
         };
         let source = SamplesBuffer::new(1, sample_rate, samples);
         sink.append(source);
-        sink.sleep_until_end();
+        // Poll so we can respond to stop() promptly rather than blocking forever
+        while !sink.empty() {
+            if !running_audio.load(Ordering::Relaxed) {
+                sink.stop();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     });
 
     // ── 40 Hz DMX loop thread ──────────────────────────────────────────────
@@ -164,7 +182,8 @@ fn start_playback(
         let start = Instant::now();
 
         loop {
-            if !running_clone.load(Ordering::Relaxed) {
+            // Check the shared flag — stop_playback() sets this to false.
+            if !running.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -172,10 +191,14 @@ fn start_playback(
             let frame_idx = (elapsed * 40.0) as usize;
 
             if frame_idx >= audio_clone.envelopes.len() {
+                // Track finished naturally — clear the running flag so the UI
+                // knows playback ended without an explicit stop() call.
+                running.store(false, Ordering::Relaxed);
                 break;
             }
 
-            frame_clone.store(frame_idx as u64, Ordering::Relaxed);
+            // Write to the shared Arc so get_current_envelopes() sees live data.
+            frame_arc.store(frame_idx as u64, Ordering::Relaxed);
 
             let env = &audio_clone.envelopes[frame_idx];
             let bpm_phase = bpm_phase_at(elapsed, audio_clone.analysis.bpm);
@@ -188,17 +211,15 @@ fn start_playback(
             };
 
             let packet = match profile {
-                LaserProfile::EytseEY003L => build_eytse_packet(&freq_env, elapsed),
+                LaserProfile::EytseEY003L    => build_eytse_packet(&freq_env, elapsed),
                 LaserProfile::Generic7Channel => build_generic7_packet(&freq_env, elapsed),
-                LaserProfile::Custom => [0u8; 16],
+                LaserProfile::Custom          => [0u8; 16],
             };
 
-            // Use send_packet() so BREAK generation and ENTTEC framing are
-            // handled correctly — raw port writes were previously missing the
-            // DMX BREAK condition entirely.
+            // send_packet() handles BREAK generation (raw) or ENTTEC envelope.
             let _ = dmx.send_packet(&packet);
 
-            // Busy-wait to hit the next 25ms boundary exactly
+            // Busy-wait to the next 25 ms boundary for a steady 40 Hz cadence.
             let next = start + Duration::from_millis(((frame_idx + 1) * 25) as u64);
             let now = Instant::now();
             if next > now {
@@ -212,6 +233,8 @@ fn start_playback(
 
 #[tauri::command]
 fn stop_playback(state: State<AppState>) {
+    // Writing false to the shared Arc is seen immediately by both background
+    // threads, which exit their loops on the next iteration.
     state.playback_running.store(false, Ordering::Relaxed);
     state.current_frame.store(0, Ordering::Relaxed);
 }
