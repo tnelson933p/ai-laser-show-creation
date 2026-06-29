@@ -34,6 +34,10 @@ export interface VisualState {
   patternIndex: number; // which Lissajous ratio preset
   gratingActive: boolean;
   energy: number;      // 0–1 overall energy
+  // Text & animation overlays
+  textEnabled: boolean;
+  textContent: string;
+  animationStyle: "none" | "stars" | "fireworks" | "wave" | "spiral";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -74,6 +78,11 @@ export interface ShowOverrides {
   movementSpeed?: number;    // 0.5–3.0 phase multiplier
   gratingEnabled?: boolean;
   patternComplexity?: "simple" | "medium" | "complex";
+  // Text overlay — beam traces the text in the laser's active color
+  textEnabled?: boolean;
+  textContent?: string;
+  // 2D animation overlay drawn on top of Lissajous patterns
+  animationStyle?: "none" | "stars" | "fireworks" | "wave" | "spiral";
   // Music transition commands (consumed and cleared by Dashboard)
   audioAction?: "fadeOut" | "fadeIn" | "cut";
   fadeSeconds?: number;      // duration for fade in/out (default 3)
@@ -318,6 +327,9 @@ export class ShowEngine {
     const visualState: VisualState = {
       xNorm, yNorm, rotation, zoom: zoomNorm,
       red, green, blue, strobe, patternIndex, gratingActive, energy,
+      textEnabled:    overrides.textEnabled    ?? false,
+      textContent:    overrides.textContent    ?? "",
+      animationStyle: overrides.animationStyle ?? "none",
     };
 
     return { channels, visualState };

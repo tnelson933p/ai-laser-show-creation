@@ -1518,6 +1518,64 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvas
         ctx.globalAlpha = 1;
       }
 
+      // ── 2D animation overlay ──────────────────────────────────────
+      if (vs.animationStyle !== "none") {
+        drawLaserAnimation(ctx, cx, cy, W, H, vs.animationStyle, animOffset, color, r255, g255, b255, vs.energy);
+      }
+
+      // ── Laser text overlay ────────────────────────────────────────
+      // Beam traces text in the laser's current color — vector/stroke style
+      if (vs.textEnabled && vs.textContent) {
+        const dpr = window.devicePixelRatio;
+        const text = vs.textContent.toUpperCase();
+        // Scale font so text fits within 85% of canvas width
+        let fontSize = Math.min(W, H) * 0.14;
+        ctx.font = `900 ${fontSize}px "Arial Black", Impact, sans-serif`;
+        while (ctx.measureText(text).width > W * 0.85 && fontSize > 18) {
+          fontSize -= 2;
+          ctx.font = `900 ${fontSize}px "Arial Black", Impact, sans-serif`;
+        }
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        // Scan reveal: text appears to be drawn by the beam, cycling every 2.5s
+        const scanT = animOffset % 2.5;
+        const revealFrac = Math.min(1, scanT / 1.2);
+        const revealChars = Math.max(1, Math.ceil(text.length * revealFrac));
+        const partial = text.slice(0, revealChars);
+
+        ctx.save();
+        // Outer glow — laser bloom
+        ctx.shadowBlur  = 28 * dpr;
+        ctx.shadowColor = color;
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = (2.8 + vs.energy * 1.5) * dpr;
+        ctx.globalAlpha = 0.7 + vs.energy * 0.25;
+        ctx.strokeText(partial, cx, cy);
+
+        // Bright white core — looks like concentrated beam
+        ctx.shadowBlur  = 8 * dpr;
+        ctx.shadowColor = "#ffffff";
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth   = 0.9 * dpr;
+        ctx.globalAlpha = 0.6 + vs.energy * 0.35;
+        ctx.strokeText(partial, cx, cy);
+
+        // Scan cursor dot — trailing bright point
+        if (revealFrac < 1) {
+          const metrics = ctx.measureText(partial);
+          const cursorX = cx - ctx.measureText(text).width / 2 + metrics.width;
+          ctx.beginPath();
+          ctx.arc(cursorX, cy, 4 * dpr, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.shadowBlur = 16 * dpr;
+          ctx.shadowColor = color;
+          ctx.globalAlpha = 1;
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
       // State label — bottom-right corner
       {
         const fontSize = 10 * window.devicePixelRatio;
@@ -1561,6 +1619,132 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvas
       style={{ height: "clamp(320px, 45vh, 540px)", display: "block" }}
     />
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2D animation overlay helper — laser-traced shapes
+// ─────────────────────────────────────────────────────────────────────────────
+function drawLaserAnimation(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number,
+  W: number, H: number,
+  style: string,
+  t: number,
+  color: string,
+  r255: number, g255: number, b255: number,
+  energy: number,
+) {
+  const dpr = window.devicePixelRatio;
+  const R = Math.min(W, H) * 0.38;
+
+  ctx.save();
+  ctx.shadowBlur  = (14 + energy * 18) * dpr;
+  ctx.shadowColor = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = (1.4 + energy * 1.0) * dpr;
+  ctx.globalAlpha = 0.65 + energy * 0.3;
+  ctx.lineCap = "round";
+
+  if (style === "stars") {
+    // Patriotic 5-pointed stars orbiting the canvas center
+    const count = 5;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + t * 0.4;
+      const orbitR = R * 0.65;
+      const sx = cx + Math.cos(angle) * orbitR;
+      const sy = cy + Math.sin(angle) * orbitR;
+      const starR = R * (0.10 + energy * 0.06);
+      ctx.beginPath();
+      for (let p = 0; p < 10; p++) {
+        const a = (p / 10) * Math.PI * 2 - Math.PI / 2 + t * 0.5;
+        const r = p % 2 === 0 ? starR : starR * 0.42;
+        const px = sx + Math.cos(a) * r;
+        const py = sy + Math.sin(a) * r;
+        if (p === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+    // Central large star
+    const bigR = R * (0.18 + energy * 0.08);
+    ctx.beginPath();
+    for (let p = 0; p < 10; p++) {
+      const a = (p / 10) * Math.PI * 2 - Math.PI / 2 + t * 0.2;
+      const r = p % 2 === 0 ? bigR : bigR * 0.42;
+      const px = cx + Math.cos(a) * r;
+      const py = cy + Math.sin(a) * r;
+      if (p === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+  } else if (style === "fireworks") {
+    // Radiating burst lines from multiple points
+    const bursts = 3;
+    const rayCount = 12;
+    for (let b = 0; b < bursts; b++) {
+      const bAngle = (b / bursts) * Math.PI * 2 + t * 0.3;
+      const bx = cx + Math.cos(bAngle) * R * 0.4;
+      const by = cy + Math.sin(bAngle) * R * 0.4;
+      const phase = (t * 1.2 + b * 1.1) % 2; // 0→1 expand, 1→2 fade
+      const reach = phase < 1 ? R * 0.32 * phase : R * 0.32 * (2 - phase);
+      ctx.globalAlpha = phase < 1 ? 0.5 + energy * 0.4 : (2 - phase) * 0.5;
+      for (let r = 0; r < rayCount; r++) {
+        const a = (r / rayCount) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx + Math.cos(a) * reach, by + Math.sin(a) * reach);
+        ctx.stroke();
+      }
+    }
+
+  } else if (style === "wave") {
+    // Sine wave beams sweeping vertically
+    const waves = 3;
+    for (let w = 0; w < waves; w++) {
+      const yOff = ((w / waves) - 0.5) * H * 0.55;
+      const freq = 3 + w;
+      const amp  = H * (0.06 + energy * 0.06);
+      ctx.globalAlpha = (0.4 + energy * 0.35) * (1 - w * 0.2);
+      ctx.beginPath();
+      for (let px = 0; px <= W; px += 4) {
+        const py = cy + yOff + Math.sin((px / W) * Math.PI * 2 * freq + t * 2 + w) * amp;
+        if (px === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
+  } else if (style === "spiral") {
+    // Archimedean spiral expanding from center
+    const turns = 4;
+    const maxR  = R * 0.88;
+    const phase = (t * 0.5) % 1; // continuous growth
+    const steps = 400;
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const frac = i / steps;
+      const a = frac * Math.PI * 2 * turns + t * 0.8;
+      const r = frac * maxR;
+      const px = cx + Math.cos(a) * r;
+      const py = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    // Second spiral, counter-rotating
+    ctx.globalAlpha *= 0.5;
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const frac = i / steps;
+      const a = -frac * Math.PI * 2 * turns - t * 0.8;
+      const r = frac * maxR * 0.7;
+      const px = cx + Math.cos(a) * r;
+      const py = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+
+  ctx.restore();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
