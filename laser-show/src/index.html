@@ -8,32 +8,55 @@
 </head>
 <body>
 
-  <!-- ── HARDWARE SETUP MODAL (shown on first launch) ── -->
+  <!-- ── HARDWARE SETUP MODAL ── -->
   <div id="setup-overlay" class="overlay">
     <div class="setup-card">
       <div class="setup-logo">
         <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-          <circle cx="24" cy="24" r="22" stroke="#6c63ff" stroke-width="2"/>
-          <path d="M24 8 L24 24 L36 32" stroke="#6c63ff" stroke-width="2.5" stroke-linecap="round"/>
-          <circle cx="24" cy="24" r="4" fill="#6c63ff"/>
-          <path d="M8 24 L16 24" stroke="#ff6584" stroke-width="2" stroke-linecap="round"/>
-          <path d="M32 24 L40 24" stroke="#43d9a3" stroke-width="2" stroke-linecap="round"/>
-          <path d="M14 14 L20 20" stroke="#ffcd56" stroke-width="2" stroke-linecap="round"/>
-          <path d="M28 28 L34 34" stroke="#ff6584" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="24" cy="24" r="22" stroke="#00ff9d" stroke-width="2"/>
+          <path d="M24 8 L24 24 L36 32" stroke="#00ff9d" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="24" cy="24" r="4" fill="#00ff9d"/>
+          <path d="M8 24 L16 24" stroke="#ff4400" stroke-width="2" stroke-linecap="round"/>
+          <path d="M32 24 L40 24" stroke="#4488ff" stroke-width="2" stroke-linecap="round"/>
+          <path d="M14 14 L20 20" stroke="#ffee00" stroke-width="2" stroke-linecap="round"/>
+          <path d="M28 28 L34 34" stroke="#aa44ff" stroke-width="2" stroke-linecap="round"/>
         </svg>
-        <h1>AI LaserShow Client</h1>
-        <p class="tagline">Configure your hardware to begin</p>
+        <h1>AI LaserShow</h1>
+        <p class="tagline">Configure your laser hardware to begin</p>
       </div>
 
       <div class="setup-fields">
+
         <label>
-          <span>Laser Brand / Model</span>
-          <select id="laser-brand">
-            <option value="EytseEY003L">Eytse EY003-L (16-Channel Mode)</option>
-            <option value="Generic7Channel">Generic DJ Animation Laser (7-Channel Mode)</option>
-            <option value="Custom">Custom Laser Array (User-Mapped Matrix)</option>
+          <span>Laser Brand</span>
+          <select id="laser-brand-select">
+            <option value="Kvant">Kvant</option>
+            <option value="Laserworld">Laserworld</option>
+            <option value="Chauvet DJ">Chauvet DJ</option>
+            <option value="American DJ">American DJ</option>
+            <option value="Showtec">Showtec</option>
+            <option value="Eliminator Lighting">Eliminator Lighting</option>
+            <option value="Beamz">Beamz</option>
+            <option value="Eytse" selected>Eytse</option>
+            <option value="Generic / Budget">Generic / Budget</option>
           </select>
         </label>
+
+        <label>
+          <span>Laser Model</span>
+          <select id="laser-model-select">
+            <!-- Populated dynamically by main.js based on brand selection -->
+          </select>
+        </label>
+
+        <!-- Capability summary (populated by JS on model selection) -->
+        <div id="laser-capability-box" class="capability-box hidden">
+          <div class="cap-header">
+            <span class="cap-label">AI SHOW STRATEGY</span>
+          </div>
+          <p id="cap-notes" class="cap-notes"></p>
+          <div id="cap-badges" class="cap-badges"></div>
+        </div>
 
         <label>
           <span>Serial COM Port</span>
@@ -50,16 +73,10 @@
           </div>
         </label>
 
-        <!-- Custom channel mapping (only visible when Custom is selected) -->
-        <div id="custom-grid" class="custom-grid hidden">
-          <p class="grid-label">Custom Channel Mapping</p>
-          <div class="channel-map-grid" id="channel-map-grid"></div>
-        </div>
-
         <div id="connect-error" class="error-msg hidden"></div>
 
         <button id="btn-connect" class="btn-primary" disabled>
-          Connect &amp; Launch
+          Connect &amp; Launch Show
         </button>
       </div>
     </div>
@@ -72,16 +89,17 @@
     <aside class="sidebar">
       <div class="sidebar-logo">
         <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
-          <circle cx="24" cy="24" r="22" stroke="#6c63ff" stroke-width="2"/>
-          <circle cx="24" cy="24" r="4" fill="#6c63ff"/>
-          <path d="M8 24 L16 24" stroke="#ff6584" stroke-width="2" stroke-linecap="round"/>
-          <path d="M32 24 L40 24" stroke="#43d9a3" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="24" cy="24" r="22" stroke="#00ff9d" stroke-width="2"/>
+          <circle cx="24" cy="24" r="4" fill="#00ff9d"/>
+          <path d="M8 24 L16 24" stroke="#ff4400" stroke-width="2" stroke-linecap="round"/>
+          <path d="M32 24 L40 24" stroke="#4488ff" stroke-width="2" stroke-linecap="round"/>
         </svg>
         <span>LaserShow</span>
       </div>
 
       <nav>
         <button class="nav-item active" data-panel="show">Show</button>
+        <button class="nav-item" data-panel="preview">Preview</button>
         <button class="nav-item" data-panel="channels">Channels</button>
         <button class="nav-item" data-panel="settings">Settings</button>
       </nav>
@@ -93,6 +111,7 @@
 
       <div class="hw-info">
         <small id="hw-brand-label">—</small>
+        <small id="hw-model-label">—</small>
         <small id="hw-port-label">—</small>
       </div>
     </aside>
@@ -103,13 +122,22 @@
       <!-- SHOW PANEL -->
       <section id="panel-show" class="panel active">
 
+        <!-- Laser info strip -->
+        <div id="laser-info-strip" class="laser-info-strip">
+          <div class="strip-laser-name">
+            <span id="strip-brand">—</span>
+            <span id="strip-model" class="strip-model">—</span>
+          </div>
+          <div id="strip-badges" class="strip-badges"></div>
+        </div>
+
         <!-- Drop zone -->
         <div id="drop-zone" class="drop-zone">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77A5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
           </svg>
           <p>Drop an audio file here</p>
-          <span>.mp3 · .wav · .ogg</span>
+          <span>.mp3 · .wav · .ogg · .flac</span>
           <button id="btn-browse" class="btn-ghost">Browse file…</button>
         </div>
 
@@ -145,25 +173,38 @@
           </div>
         </div>
 
-        <!-- Spectrum visualiser -->
+        <!-- Spectrum visualiser + envelopes -->
         <div class="visualiser-wrap">
           <canvas id="spectrum-canvas" class="spectrum-canvas"></canvas>
           <div class="envelope-bars">
             <div class="env-bar">
-              <div class="env-fill" id="bar-bass"></div>
+              <div class="env-fill" id="bar-bass" style="background:#ff3300"></div>
               <span>BASS</span>
             </div>
             <div class="env-bar">
-              <div class="env-fill" id="bar-mid"></div>
+              <div class="env-fill" id="bar-mid" style="background:#00ff9d"></div>
               <span>MID</span>
             </div>
             <div class="env-bar">
-              <div class="env-fill" id="bar-high"></div>
+              <div class="env-fill" id="bar-high" style="background:#aa44ff"></div>
               <span>HIGH</span>
             </div>
           </div>
         </div>
 
+        <!-- Strategy note strip (AI show notes) -->
+        <div id="strategy-strip" class="strategy-strip hidden">
+          <span class="strategy-label">AI STRATEGY</span>
+          <span id="strategy-text"></span>
+        </div>
+
+      </section>
+
+      <!-- PREVIEW PANEL -->
+      <section id="panel-preview" class="panel">
+        <h2>Laser Show Preview</h2>
+        <p class="sub">Live visual simulation of what your laser will display</p>
+        <canvas id="preview-canvas" class="preview-canvas"></canvas>
       </section>
 
       <!-- CHANNELS PANEL -->
@@ -178,12 +219,22 @@
         <h2>Hardware Settings</h2>
         <div class="settings-group">
           <label>
-            <span>Laser Profile</span>
-            <select id="settings-profile">
-              <option value="EytseEY003L">Eytse EY003-L (16-Channel)</option>
-              <option value="Generic7Channel">Generic 7-Channel</option>
-              <option value="Custom">Custom</option>
+            <span>Laser Brand</span>
+            <select id="settings-brand">
+              <option value="Kvant">Kvant</option>
+              <option value="Laserworld">Laserworld</option>
+              <option value="Chauvet DJ">Chauvet DJ</option>
+              <option value="American DJ">American DJ</option>
+              <option value="Showtec">Showtec</option>
+              <option value="Eliminator Lighting">Eliminator Lighting</option>
+              <option value="Beamz">Beamz</option>
+              <option value="Eytse" selected>Eytse</option>
+              <option value="Generic / Budget">Generic / Budget</option>
             </select>
+          </label>
+          <label>
+            <span>Laser Model</span>
+            <select id="settings-model"></select>
           </label>
           <label>
             <span>COM Port</span>
@@ -197,7 +248,7 @@
               </button>
             </div>
           </label>
-          <button id="btn-reconnect" class="btn-primary">Reconnect</button>
+          <button id="btn-reconnect" class="btn-primary">Apply &amp; Reconnect</button>
           <button id="btn-disconnect" class="btn-ghost btn-danger">Disconnect</button>
         </div>
       </section>

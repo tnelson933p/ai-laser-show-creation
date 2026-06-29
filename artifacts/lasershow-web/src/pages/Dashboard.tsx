@@ -1,15 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Progress } from "@/components/ui/progress";
 import { analyzeTrack } from "@/lib/audio-engine";
-import { Play, Square, Upload, Usb, HardDrive, Download, Activity, AudioLines } from "lucide-react";
+import {
+  LASER_BRANDS, LASER_DATABASE, getLaserByBrandModel,
+  type LaserModel,
+} from "@/lib/laser-database";
+import { ShowEngine, LISSAJOUS_PRESETS, type VisualState } from "@/lib/show-engine";
+import {
+  Play, Square, Upload, Usb, Activity, Zap, Music, ChevronDown, ChevronUp, Cpu,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-
-// --- Types ---
-type LaserProfile = "eytse-16" | "generic-7" | "custom";
 
 interface TrackData {
   filename: string;
@@ -23,21 +26,34 @@ interface TrackData {
   };
 }
 
-// --- Main App Component ---
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Dashboard
+// ─────────────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const [laserProfile, setLaserProfile] = useState<LaserProfile>("eytse-16");
-  const [port, setPort] = useState<SerialPort | null>(null);
-  const [setupComplete, setSetupComplete] = useState(false);
-  const [webSerialSupported, setWebSerialSupported] = useState(true);
-  
+  // Laser selection
+  const [selectedBrand, setSelectedBrand] = useState<string>("Eytse");
+  const [selectedModel, setSelectedModel] = useState<string>("EY003-L (16-ch)");
+  const [laser, setLaser] = useState<LaserModel | null>(null);
+
+  // Audio
   const [track, setTrack] = useState<TrackData | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  
   const [currentFrame, setCurrentFrame] = useState(0);
   const [currentEnvelopes, setCurrentEnvelopes] = useState({ bass: 0, mid: 0, high: 0 });
+
+  // DMX
   const [dmxOutput, setDmxOutput] = useState<number[]>(new Array(16).fill(0));
-  
+  const [port, setPort] = useState<SerialPort | null>(null);
+  const [webSerialSupported, setWebSerialSupported] = useState(true);
+  const [dmxExpanded, setDmxExpanded] = useState(false);
+
+  // Show engine
+  const engineRef = useRef<ShowEngine | null>(null);
+  const visualStateRef = useRef<VisualState | null>(null);
+
+  // Audio refs
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -45,521 +61,803 @@ export default function Dashboard() {
   const timerRef = useRef<number | null>(null);
   const writerRef = useRef<WritableStreamDefaultWriter<Uint8Array> | null>(null);
 
-  // Initialize checks
+  // Init
   useEffect(() => {
-    if (!("serial" in navigator)) {
-      setWebSerialSupported(false);
-    }
-    // Force dark mode
     document.documentElement.classList.add("dark");
+    if (!("serial" in navigator)) setWebSerialSupported(false);
   }, []);
 
-  // --- Hardware Setup ---
+  // Resolve laser model
+  useEffect(() => {
+    const found = getLaserByBrandModel(selectedBrand, selectedModel);
+    setLaser(found ?? null);
+    if (found) {
+      engineRef.current = new ShowEngine(found);
+    }
+  }, [selectedBrand, selectedModel]);
+
+  // Brand change → pick first model
+  const handleBrandChange = (brand: string) => {
+    setSelectedBrand(brand);
+    const models = LASER_DATABASE.filter(l => l.brand === brand);
+    if (models.length > 0) setSelectedModel(models[0].model);
+  };
+
+  // ── Hardware ────────────────────────────────────────────────────────────
   const connectPort = async () => {
     try {
-      const selectedPort = await navigator.serial.requestPort();
-      await selectedPort.open({ baudRate: 250000 });
-      setPort(selectedPort);
-      writerRef.current = selectedPort.writable?.getWriter() ?? null;
-      setSetupComplete(true);
-    } catch (err) {
-      console.error("Failed to connect to serial port", err);
-    }
+      const p = await navigator.serial.requestPort();
+      await p.open({ baudRate: 250000 });
+      setPort(p);
+      writerRef.current = p.writable?.getWriter() ?? null;
+    } catch { /* user cancelled */ }
   };
 
-  const skipSetup = () => {
-    setSetupComplete(true);
-  };
-
-  // --- Audio Engine ---
-  const onFileDrop = async (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (!file || (!file.name.endsWith('.mp3') && !file.name.endsWith('.wav'))) {
-      alert("Please drop an .mp3 or .wav file");
+  // ── Audio ───────────────────────────────────────────────────────────────
+  const loadFile = async (file: File) => {
+    if (!file.name.match(/\.(mp3|wav|ogg|flac)$/i)) {
+      alert("Please select an audio file (.mp3, .wav, .ogg, .flac)");
       return;
     }
-
     setIsAnalyzing(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new AudioContext();
-      }
+      if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
       const audioBuffer = await audioCtxRef.current.decodeAudioData(arrayBuffer);
       const analysis = await analyzeTrack(audioBuffer);
-      
-      setTrack({
-        filename: file.name,
-        buffer: audioBuffer,
-        analysis
-      });
-    } catch (err) {
-      console.error("Audio processing failed", err);
-      alert("Audio processing failed");
-    } finally {
-      setIsAnalyzing(false);
-    }
+      setTrack({ filename: file.name, buffer: audioBuffer, analysis });
+    } catch { alert("Audio processing failed. Try another file."); }
+    finally { setIsAnalyzing(false); }
   };
+
+  const onFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) loadFile(file);
+  };
+
+  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) loadFile(file);
+    e.target.value = "";
+  };
+
+  const ejectTrack = useCallback(() => {
+    if (isPlaying) stopPlayback();
+    setTrack(null);
+    setCurrentFrame(0);
+    setDmxOutput(new Array(16).fill(0));
+    setCurrentEnvelopes({ bass: 0, mid: 0, high: 0 });
+    visualStateRef.current = null;
+  }, [isPlaying]);
+
+  // ── Playback ─────────────────────────────────────────────────────────────
+  const stopPlayback = useCallback(() => {
+    sourceNodeRef.current?.stop();
+    sourceNodeRef.current?.disconnect();
+    if (timerRef.current) clearInterval(timerRef.current);
+    setIsPlaying(false);
+    setCurrentEnvelopes({ bass: 0, mid: 0, high: 0 });
+    setDmxOutput(new Array(selectedLaserChannels => selectedLaserChannels).fill(0));
+    engineRef.current?.reset();
+    visualStateRef.current = null;
+  }, []);
 
   const togglePlayback = () => {
     if (!track || !audioCtxRef.current) return;
+    if (isPlaying) { stopPlayback(); return; }
 
-    if (isPlaying) {
-      // Stop
-      sourceNodeRef.current?.stop();
-      sourceNodeRef.current?.disconnect();
+    const source = audioCtxRef.current.createBufferSource();
+    source.buffer = track.buffer;
+    const analyser = audioCtxRef.current.createAnalyser();
+    analyser.fftSize = 256;
+    analyserRef.current = analyser;
+    source.connect(analyser);
+    analyser.connect(audioCtxRef.current.destination);
+    source.start();
+    sourceNodeRef.current = source;
+    startTimeRef.current = audioCtxRef.current.currentTime;
+    setIsPlaying(true);
+    engineRef.current?.reset();
+    timerRef.current = window.setInterval(dmxLoop, 25);
+    source.onended = () => {
       if (timerRef.current) clearInterval(timerRef.current);
       setIsPlaying(false);
-      setCurrentEnvelopes({ bass: 0, mid: 0, high: 0 });
+      visualStateRef.current = null;
       setDmxOutput(new Array(16).fill(0));
-    } else {
-      // Play
-      const source = audioCtxRef.current.createBufferSource();
-      source.buffer = track.buffer;
-      
-      const analyser = audioCtxRef.current.createAnalyser();
-      analyser.fftSize = 128;
-      analyserRef.current = analyser;
-      
-      source.connect(analyser);
-      analyser.connect(audioCtxRef.current.destination);
-      
-      source.start();
-      sourceNodeRef.current = source;
-      startTimeRef.current = audioCtxRef.current.currentTime;
-      setIsPlaying(true);
-      
-      // Start 40Hz Loop
-      timerRef.current = window.setInterval(() => dmxLoop(), 25);
-      
-      source.onended = () => {
-        setIsPlaying(false);
-        if (timerRef.current) clearInterval(timerRef.current);
-        setDmxOutput(new Array(16).fill(0));
-      };
-    }
+    };
   };
 
-  // --- DMX 40Hz Loop ---
-  const phaseRef = useRef(0);
-  
+  // ── 40Hz DMX Loop ─────────────────────────────────────────────────────
   const dmxLoop = useCallback(() => {
-    if (!track || !audioCtxRef.current) return;
-    
+    if (!track || !audioCtxRef.current || !engineRef.current) return;
     const elapsed = audioCtxRef.current.currentTime - startTimeRef.current;
     const frameIndex = Math.floor(elapsed * 40);
-    
-    if (frameIndex >= track.analysis.bass.length) {
-      return; // End of track
-    }
-
+    if (frameIndex >= track.analysis.bass.length) return;
     setCurrentFrame(frameIndex);
 
     const bass = track.analysis.bass[frameIndex] || 0;
-    const mid = track.analysis.mid[frameIndex] || 0;
+    const mid  = track.analysis.mid[frameIndex]  || 0;
     const high = track.analysis.high[frameIndex] || 0;
-    const bpm = track.analysis.bpm;
-    
+    const bpm  = track.analysis.bpm;
+
     setCurrentEnvelopes({ bass, mid, high });
 
-    // DMX Logic
-    const channels = new Array(16).fill(0);
-    phaseRef.current += (bpm / 60) * (25 / 1000) * Math.PI * 2; // radians per tick
-    
-    if (laserProfile === "eytse-16") {
-      channels[0] = 120; // Mode
-      channels[1] = mid > 0.75 ? 255 : 0; // Anim Bank
-      channels[2] = (mid + high) > 1.2 ? 150 : 50; // Pattern
-      channels[3] = 0;
-      channels[4] = Math.floor(127 + Math.sin(phaseRef.current) * 127); // X
-      channels[5] = Math.floor(127 + Math.cos(phaseRef.current) * 127); // Y
-      channels[6] = Math.floor(127 + Math.sin(phaseRef.current * 0.5) * 127); // Rot
-      channels[7] = 0;
-      channels[8] = bass > 0.8 ? 255 : 100; // Zoom
-      channels[9] = 0;
-      channels[10] = high > 0.7 ? Math.floor(high * 255) : 0; // Strobe
-      channels[11] = Math.floor(bass * 255); // Red
-      channels[12] = Math.floor(mid * 255); // Green
-      channels[13] = Math.floor(high * 255); // Blue
-      channels[14] = ((bass + mid + high)/3) > 0.65 ? 180 : 0; // Grating
-      channels[15] = 0;
-    } else if (laserProfile === "generic-7") {
-      channels[0] = 100;
-      channels[1] = Math.floor((mid + high) * 0.5 * 200);
-      channels[2] = high > 0.65 ? Math.floor(high * 255) : 0;
-      channels[3] = bass > 0.75 ? 255 : Math.floor(100 + bass * 100);
-      channels[4] = Math.floor(127 + Math.sin(phaseRef.current) * 127);
-      channels[5] = Math.floor(127 + Math.cos(phaseRef.current) * 127);
-      channels[6] = Math.floor(phaseRef.current * 20) % 255;
-    }
-    
-    setDmxOutput(channels);
+    const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: elapsed });
+    setDmxOutput(result.channels);
+    visualStateRef.current = result.visualState;
 
-    // Write to serial port
     if (writerRef.current) {
       try {
-        const packet = new Uint8Array(17);
-        packet[0] = 0x00; // DMX Start Code
-        for (let i = 0; i < 16; i++) {
-          packet[i + 1] = channels[i];
-        }
+        const chCount = result.channels.length;
+        const packet = new Uint8Array(chCount + 1);
+        packet[0] = 0x00;
+        for (let i = 0; i < chCount; i++) packet[i + 1] = result.channels[i];
         writerRef.current.write(packet);
-      } catch (err) {
-        console.error("Failed to write to port", err);
-      }
+      } catch { /* port error, ignore */ }
     }
-  }, [track, laserProfile]);
+  }, [track]);
+
+  const selectedLaserChannels = laser?.channelCount ?? 16;
 
   return (
-    <div className="min-h-screen bg-[#050505] text-zinc-300 font-mono flex flex-col">
-      {/* Header */}
-      <header className="border-b border-zinc-900 bg-black/50 p-4 sticky top-0 z-10 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Activity className="w-6 h-6 text-primary animate-pulse" />
-            <h1 className="text-xl font-bold tracking-tight text-white uppercase">AI LaserShow</h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <Badge variant="outline" className={cn(
-              "font-mono rounded-sm border-zinc-800",
-              port ? "text-primary border-primary/50" : "text-zinc-500"
-            )}>
-              {port ? "DMX CONNECTED" : "DMX OFFLINE"}
+    <div className="min-h-screen bg-[#030305] text-zinc-300 font-mono flex flex-col">
+
+      {/* ── Header ───────────────────────────────────────────────────── */}
+      <header className="border-b border-zinc-900 bg-black/60 px-6 py-3 sticky top-0 z-10 backdrop-blur-md flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Activity className="w-5 h-5 text-[#00ff9d] animate-pulse" />
+          <span className="text-lg font-bold tracking-widest text-white uppercase">AI LaserShow</span>
+        </div>
+        <div className="flex items-center gap-3">
+          {port && (
+            <Badge className="bg-[#00ff9d]/10 text-[#00ff9d] border border-[#00ff9d]/30 rounded-sm font-mono text-xs">
+              <Usb className="w-3 h-3 mr-1" /> DMX LIVE
             </Badge>
-            <Badge variant="outline" className={cn(
-              "font-mono rounded-sm border-zinc-800",
-              isPlaying ? "text-green-400 border-green-400/50" : "text-zinc-500"
-            )}>
-              {isPlaying ? "ENGINE LIVE" : "ENGINE IDLE"}
-            </Badge>
-          </div>
+          )}
+          <Badge className={cn(
+            "rounded-sm font-mono text-xs border",
+            isPlaying
+              ? "bg-primary/10 text-primary border-primary/30"
+              : "bg-zinc-900 text-zinc-500 border-zinc-800"
+          )}>
+            {isPlaying ? "● SHOW LIVE" : "○ STANDBY"}
+          </Badge>
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
-        
-        {/* Step 1: Hardware Setup */}
-        {!setupComplete && (
-          <Card className="border-zinc-800 bg-[#0a0a0a] shadow-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-white">
-                <HardDrive className="w-5 h-5" />
-                Hardware Configuration
+      <main className="flex-1 flex flex-col p-4 gap-4 max-w-[1400px] mx-auto w-full">
+
+        {/* ── Top Row: Laser Config + Music ──────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          {/* Laser Configuration Panel */}
+          <Card className="border-zinc-800/60 bg-[#08080f] shadow-xl">
+            <CardHeader className="pb-3 pt-4 px-5">
+              <CardTitle className="text-sm uppercase tracking-widest text-zinc-400 flex items-center gap-2">
+                <Zap className="w-4 h-4 text-[#00ff9d]" /> Laser Configuration
               </CardTitle>
-              <CardDescription className="text-zinc-400">
-                Connect your DMX interface via Web Serial. Requires Chrome or Edge.
-              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
-              {!webSerialSupported && (
-                <div className="p-4 bg-destructive/10 border border-destructive/30 rounded text-destructive text-sm flex flex-col gap-2">
-                  <p>Web Serial requires Chrome or Edge. Download the desktop app for full hardware support.</p>
-                  <a href="#download" className="underline font-bold">Get Desktop App</a>
-                </div>
-              )}
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs uppercase tracking-wider text-zinc-500 font-bold">Laser Brand</label>
-                  <Select value={laserProfile} onValueChange={(v) => setLaserProfile(v as LaserProfile)}>
-                    <SelectTrigger className="bg-black border-zinc-800 text-white rounded-sm h-12">
+            <CardContent className="px-5 pb-5 space-y-4">
+              {/* Brand + Model selectors */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase tracking-widest text-zinc-600">Brand</label>
+                  <Select value={selectedBrand} onValueChange={handleBrandChange}>
+                    <SelectTrigger className="bg-black border-zinc-800 text-white rounded-sm h-10 text-sm">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="bg-[#111] border-zinc-800 text-white">
-                      <SelectItem value="eytse-16">Eytse EY003-L (16-Channel Mode)</SelectItem>
-                      <SelectItem value="generic-7">Generic DJ Animation Laser (7-Channel Mode)</SelectItem>
-                      <SelectItem value="custom">Custom Laser Array (User-Mapped Matrix)</SelectItem>
+                    <SelectContent className="bg-[#0d0d0d] border-zinc-800 text-white">
+                      {Object.keys(LASER_BRANDS).map(brand => (
+                        <SelectItem key={brand} value={brand} className="text-sm">{brand}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="flex gap-4">
-                  <Button 
-                    onClick={connectPort} 
-                    disabled={!webSerialSupported}
-                    className="flex-1 h-12 bg-primary hover:bg-primary/90 text-black font-bold uppercase tracking-wider rounded-sm"
-                    data-testid="button-connect-dmx"
-                  >
-                    <Usb className="w-5 h-5 mr-2" /> Connect DMX Port
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    onClick={skipSetup}
-                    className="h-12 border-zinc-800 text-zinc-400 hover:text-white rounded-sm"
-                    data-testid="button-skip-setup"
-                  >
-                    Skip (Visualizer Only)
-                  </Button>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase tracking-widest text-zinc-600">Model</label>
+                  <Select value={selectedModel} onValueChange={setSelectedModel}>
+                    <SelectTrigger className="bg-black border-zinc-800 text-white rounded-sm h-10 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#0d0d0d] border-zinc-800 text-white">
+                      {LASER_DATABASE.filter(l => l.brand === selectedBrand).map(l => (
+                        <SelectItem key={l.id} value={l.model} className="text-sm">{l.model}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
+
+              {/* Capability badges */}
+              {laser && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    <Badge className="bg-zinc-900 border border-zinc-700 text-zinc-300 rounded-sm text-[10px]">
+                      {laser.channelCount}ch DMX
+                    </Badge>
+                    <Badge className="bg-zinc-900 border border-zinc-700 text-zinc-300 rounded-sm text-[10px]">
+                      {laser.maxPowerMw >= 1000 ? `${laser.maxPowerMw / 1000}W` : `${laser.maxPowerMw}mW`}
+                    </Badge>
+                    <Badge className="bg-zinc-900 border border-zinc-700 text-zinc-300 rounded-sm text-[10px]">
+                      {laser.scanAngleDeg}° scan
+                    </Badge>
+                    <Badge className="bg-zinc-900 border border-zinc-700 text-zinc-300 rounded-sm text-[10px]">
+                      {laser.builtInPatterns} patterns
+                    </Badge>
+                    <Badge className={cn("rounded-sm text-[10px] border", {
+                      "bg-green-900/30 border-green-700/50 text-green-400": laser.scanTier === "pro",
+                      "bg-blue-900/30 border-blue-700/50 text-blue-400":  laser.scanTier === "fast",
+                      "bg-yellow-900/30 border-yellow-700/50 text-yellow-400": laser.scanTier === "mid",
+                      "bg-zinc-900 border-zinc-700 text-zinc-400": laser.scanTier === "budget",
+                    })}>
+                      {laser.scanTier.toUpperCase()} SCAN
+                    </Badge>
+                    <Badge className="bg-zinc-900 border border-zinc-700 text-zinc-300 rounded-sm text-[10px]">
+                      {laser.colorMode.toUpperCase()}
+                    </Badge>
+                  </div>
+
+                  {/* Color swatches */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-zinc-600 uppercase tracking-wider">Colors:</span>
+                    <div className="flex gap-1">
+                      {laser.availableColors.map((c, i) => (
+                        <div
+                          key={i}
+                          title={c}
+                          className="w-4 h-4 rounded-full border border-zinc-800"
+                          style={{ backgroundColor: colorNameToHex(c) }}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[10px] text-zinc-600 truncate">
+                      {laser.availableColors.join(" · ")}
+                    </span>
+                  </div>
+
+                  {/* AI strategy notes */}
+                  <AIAnalysisPanel laser={laser} />
+
+                  {/* DMX connect */}
+                  {webSerialSupported && (
+                    <Button
+                      onClick={connectPort}
+                      variant="outline"
+                      size="sm"
+                      className={cn(
+                        "border-zinc-800 text-zinc-400 hover:text-white rounded-sm text-xs",
+                        port && "border-[#00ff9d]/40 text-[#00ff9d]"
+                      )}
+                    >
+                      <Usb className="w-3 h-3 mr-1.5" />
+                      {port ? "DMX Connected" : "Connect DMX Hardware"}
+                    </Button>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
-        )}
 
-        {/* Dashboard Grid */}
-        {setupComplete && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            
-            {/* Left Col: Audio Engine & Downloads */}
-            <div className="space-y-6">
-              <Card className="border-zinc-800 bg-[#0a0a0a]">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-white">
-                    <AudioLines className="w-5 h-5" />
-                    Audio Engine
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  {!track ? (
-                    <div 
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={onFileDrop}
-                      className={cn(
-                        "border-2 border-dashed border-zinc-800 rounded-sm p-10 flex flex-col items-center justify-center gap-4 transition-colors",
-                        isAnalyzing ? "opacity-50" : "hover:border-primary/50 hover:bg-primary/5 cursor-pointer"
-                      )}
-                      data-testid="dropzone-audio"
-                    >
-                      <Upload className="w-8 h-8 text-zinc-600" />
-                      <div className="text-center">
-                        <p className="text-sm font-bold text-zinc-300">
-                          {isAnalyzing ? "ANALYZING TRACK..." : "DRAG & DROP TRACK"}
-                        </p>
-                        <p className="text-xs text-zinc-600 mt-1">.mp3 or .wav only</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-6">
-                      <div className="p-4 bg-black border border-zinc-800 rounded-sm space-y-3">
-                        <div className="flex items-start justify-between gap-4">
-                          <p className="text-sm font-bold text-white truncate" title={track.filename}>
-                            {track.filename}
-                          </p>
-                          <Badge className="bg-primary/20 text-primary border-none rounded-sm whitespace-nowrap">
-                            {track.analysis.bpm} BPM
-                          </Badge>
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-zinc-500">
-                          <span>{(track.analysis.duration / 60).toFixed(2)} min</span>
-                          <span>40Hz ENVELOPES READY</span>
-                        </div>
-                      </div>
-                      
-                      <div className="flex gap-2">
-                        <Button 
-                          onClick={togglePlayback}
-                          className={cn(
-                            "flex-1 h-16 text-lg font-bold uppercase rounded-sm transition-all",
-                            isPlaying ? "bg-destructive hover:bg-destructive/90 text-white" : "bg-primary hover:bg-primary/90 text-black"
-                          )}
-                          data-testid="button-play-stop"
-                        >
-                          {isPlaying ? <><Square className="w-5 h-5 mr-2 fill-current" /> STOP</> : <><Play className="w-5 h-5 mr-2 fill-current" /> PLAY</>}
-                        </Button>
-                        <Button 
-                          variant="outline"
-                          onClick={() => {
-                            if(isPlaying) togglePlayback();
-                            setTrack(null);
-                            setCurrentFrame(0);
-                            setDmxOutput(new Array(16).fill(0));
-                          }}
-                          className="h-16 w-16 border-zinc-800 text-zinc-400 hover:text-white rounded-sm"
-                          data-testid="button-eject"
-                          title="Eject Track"
-                        >
-                          <Upload className="w-5 h-5" />
-                        </Button>
-                      </div>
-                    </div>
+          {/* Music Panel */}
+          <Card className="border-zinc-800/60 bg-[#08080f] shadow-xl">
+            <CardHeader className="pb-3 pt-4 px-5">
+              <CardTitle className="text-sm uppercase tracking-widest text-zinc-400 flex items-center gap-2">
+                <Music className="w-4 h-4 text-primary" /> Music
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-5 pb-5 space-y-4">
+              {!track ? (
+                <label
+                  className={cn(
+                    "border-2 border-dashed rounded-sm flex flex-col items-center justify-center gap-3 cursor-pointer transition-all p-10",
+                    isDragOver
+                      ? "border-primary/70 bg-primary/5"
+                      : "border-zinc-800 hover:border-zinc-600 hover:bg-zinc-900/30",
+                    isAnalyzing && "opacity-60 pointer-events-none"
                   )}
-                </CardContent>
-              </Card>
-              
-              <Card className="border-zinc-800 bg-[#0a0a0a]" id="download">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-white">
-                    <Download className="w-5 h-5" />
-                    Desktop App
-                  </CardTitle>
-                  <CardDescription className="text-zinc-500 text-xs">
-                    Zero latency. Native hardware access. Works without Chrome.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <a href="https://github.com/tnelson933P/ai-laser-show-creation/releases" target="_blank" rel="noreferrer" className="block">
-                    <Button variant="outline" className="w-full justify-start border-zinc-800 text-zinc-300 hover:bg-zinc-900 rounded-sm">
-                      Windows (.msi / .exe)
-                    </Button>
-                  </a>
-                  <a href="https://github.com/tnelson933P/ai-laser-show-creation/releases" target="_blank" rel="noreferrer" className="block">
-                    <Button variant="outline" className="w-full justify-start border-zinc-800 text-zinc-300 hover:bg-zinc-900 rounded-sm">
-                      macOS Apple Silicon (.dmg)
-                    </Button>
-                  </a>
-                  <a href="https://github.com/tnelson933P/ai-laser-show-creation/releases" target="_blank" rel="noreferrer" className="block">
-                    <Button variant="outline" className="w-full justify-start border-zinc-800 text-zinc-300 hover:bg-zinc-900 rounded-sm">
-                      macOS Intel (.dmg)
-                    </Button>
-                  </a>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Right Col: Visuals & DMX */}
-            <div className="lg:col-span-2 space-y-6">
-              
-              <Card className="border-zinc-800 bg-[#0a0a0a]">
-                <CardContent className="p-6 space-y-6">
-                  {/* Spectrum Visualizer */}
-                  <div className="h-48 bg-black border border-zinc-800 rounded-sm relative overflow-hidden flex items-end p-2 gap-[2px]">
-                    <LiveSpectrum analyser={analyserRef.current} isPlaying={isPlaying} />
-                    
-                    {/* Time Progress Overlay */}
-                    {track && (
-                      <div className="absolute top-2 right-3 font-mono text-xs text-zinc-500">
-                        {((currentFrame * 0.025) / 60).toFixed(2)} / {(track.analysis.duration / 60).toFixed(2)}
+                  onDragOver={e => { e.preventDefault(); setIsDragOver(true); }}
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={onFileDrop}
+                  data-testid="dropzone-audio"
+                >
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".mp3,.wav,.ogg,.flac"
+                    onChange={onFileInput}
+                  />
+                  <Upload className={cn("w-8 h-8", isDragOver ? "text-primary" : "text-zinc-600")} />
+                  <div className="text-center">
+                    <p className="text-sm font-bold text-zinc-300">
+                      {isAnalyzing ? "ANALYZING TRACK…" : "DROP MUSIC HERE"}
+                    </p>
+                    <p className="text-xs text-zinc-600 mt-1">MP3, WAV, OGG, FLAC</p>
+                    <p className="text-xs text-zinc-700 mt-0.5">or click to browse</p>
+                  </div>
+                </label>
+              ) : (
+                <div className="space-y-4">
+                  {/* Track info */}
+                  <div className="bg-black border border-zinc-800 rounded-sm p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold text-white truncate">{track.filename}</span>
+                      <Badge className="bg-primary/20 text-primary border-none rounded-sm text-xs shrink-0">
+                        {track.analysis.bpm} BPM
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="space-y-0.5">
+                        <div className="text-zinc-600 uppercase tracking-wider text-[10px]">Duration</div>
+                        <div className="text-zinc-300">{formatDuration(track.analysis.duration)}</div>
                       </div>
-                    )}
-                  </div>
-
-                  {/* Envelope Meters */}
-                  <div className="grid grid-cols-3 gap-4">
-                    <Meter label="BASS" value={currentEnvelopes.bass} color="bg-[#ff4400]" glow="laser-glow-bass" />
-                    <Meter label="MID" value={currentEnvelopes.mid} color="bg-[#00ff9d]" glow="laser-glow-mid" />
-                    <Meter label="HIGH" value={currentEnvelopes.high} color="bg-[#bb00ff]" glow="laser-glow-high" />
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* DMX Output Grid */}
-              <Card className="border-zinc-800 bg-[#0a0a0a]">
-                <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle className="text-white">DMX Output</CardTitle>
-                  <Badge variant="outline" className="text-zinc-500 border-zinc-800 rounded-sm font-mono">
-                    CH: {laserProfile === "generic-7" ? 7 : 16}
-                  </Badge>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3">
-                    {dmxOutput.slice(0, laserProfile === "generic-7" ? 7 : 16).map((val, idx) => (
-                      <div key={idx} className="bg-black border border-zinc-800 rounded-sm p-3 flex flex-col gap-2 relative overflow-hidden group">
-                        <div className="flex justify-between items-center text-[10px] text-zinc-500 font-bold">
-                          <span>CH{idx + 1}</span>
-                          <span className="text-white">{val}</span>
-                        </div>
-                        <div className="text-[10px] leading-tight text-zinc-400 truncate" title={getChannelName(laserProfile, idx)}>
-                          {getChannelName(laserProfile, idx)}
-                        </div>
-                        {/* Tiny progress bar */}
-                        <div className="h-1 bg-zinc-900 rounded-full mt-1 overflow-hidden">
-                          <div 
-                            className="h-full bg-zinc-500 transition-all duration-75"
-                            style={{ width: `${(val / 255) * 100}%` }}
-                          />
+                      <div className="space-y-0.5">
+                        <div className="text-zinc-600 uppercase tracking-wider text-[10px]">Progress</div>
+                        <div className="text-zinc-300 font-mono">{formatDuration(currentFrame / 40)}</div>
+                      </div>
+                      <div className="space-y-0.5">
+                        <div className="text-zinc-600 uppercase tracking-wider text-[10px]">Status</div>
+                        <div className={isPlaying ? "text-[#00ff9d]" : "text-zinc-500"}>
+                          {isPlaying ? "● LIVE" : "○ READY"}
                         </div>
                       </div>
-                    ))}
+                    </div>
+                    {/* Progress bar */}
+                    <div className="h-1 bg-zinc-900 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary transition-none"
+                        style={{ width: `${(currentFrame / 40 / track.analysis.duration) * 100}%` }}
+                      />
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
 
+                  {/* Envelope meters */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <Meter label="BASS" value={currentEnvelopes.bass} color="#ff3300" />
+                    <Meter label="MID"  value={currentEnvelopes.mid}  color="#00ff9d" />
+                    <Meter label="HIGH" value={currentEnvelopes.high} color="#aa44ff" />
+                  </div>
+
+                  {/* Controls */}
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={togglePlayback}
+                      className={cn(
+                        "flex-1 h-12 font-bold uppercase tracking-wider rounded-sm transition-all",
+                        isPlaying
+                          ? "bg-red-600 hover:bg-red-700 text-white"
+                          : "bg-primary hover:bg-primary/90 text-black"
+                      )}
+                      data-testid="button-play-stop"
+                    >
+                      {isPlaying
+                        ? <><Square className="w-4 h-4 mr-2 fill-current" /> Stop</>
+                        : <><Play  className="w-4 h-4 mr-2 fill-current" /> Play Show</>
+                      }
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={ejectTrack}
+                      className="h-12 px-4 border-zinc-800 text-zinc-500 hover:text-white rounded-sm"
+                      title="Eject track"
+                    >
+                      <Upload className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── Laser Show Preview Canvas ───────────────────────────────── */}
+        <Card className="border-zinc-800/60 bg-black shadow-2xl flex-1">
+          <CardContent className="p-0">
+            <LaserCanvas
+              visualStateRef={visualStateRef}
+              isPlaying={isPlaying}
+              laser={laser}
+              analyser={analyserRef.current}
+            />
+          </CardContent>
+        </Card>
+
+        {/* ── DMX Channel Grid (collapsible) ──────────────────────────── */}
+        <div className="border border-zinc-800/60 rounded-lg bg-[#08080f] overflow-hidden">
+          <button
+            onClick={() => setDmxExpanded(v => !v)}
+            className="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-zinc-900/40 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-widest text-zinc-500 font-bold">DMX Output</span>
+              <Badge variant="outline" className="text-zinc-600 border-zinc-800 rounded-sm font-mono text-[10px]">
+                {selectedLaserChannels} CH
+              </Badge>
             </div>
-          </div>
-        )}
+            {dmxExpanded ? <ChevronUp className="w-4 h-4 text-zinc-600" /> : <ChevronDown className="w-4 h-4 text-zinc-600" />}
+          </button>
+          {dmxExpanded && (
+            <div className="px-5 pb-4">
+              <div className="grid grid-cols-4 sm:grid-cols-8 md:grid-cols-16 gap-2">
+                {dmxOutput.slice(0, selectedLaserChannels).map((val, idx) => {
+                  const chDef = laser?.channelMap[idx];
+                  return (
+                    <div key={idx} className="bg-black border border-zinc-900 rounded-sm p-2 flex flex-col gap-1">
+                      <div className="flex justify-between items-center text-[9px] text-zinc-600 font-bold">
+                        <span>CH{idx + 1}</span>
+                        <span className="text-white">{val}</span>
+                      </div>
+                      <div className="text-[9px] text-zinc-500 truncate leading-tight" title={chDef?.name}>
+                        {chDef?.name ?? "—"}
+                      </div>
+                      <div className="h-0.5 bg-zinc-900 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-zinc-400 transition-all duration-75"
+                          style={{ width: `${(val / 255) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
       </main>
     </div>
   );
 }
 
-// --- Subcomponents ---
+// ─────────────────────────────────────────────────────────────────────────────
+// AI Analysis Panel
+// ─────────────────────────────────────────────────────────────────────────────
+function AIAnalysisPanel({ laser }: { laser: LaserModel }) {
+  const [aiText, setAiText] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
-function LiveSpectrum({ analyser, isPlaying }: { analyser: AnalyserNode | null, isPlaying: boolean }) {
+  // Reset AI text when laser changes
+  useEffect(() => { setAiText(""); setExpanded(false); }, [laser.id]);
+
+  const runAnalysis = async () => {
+    setLoading(true);
+    setAiText("");
+    setExpanded(true);
+    try {
+      const resp = await fetch("/api/laser/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brand: laser.brand,
+          model: laser.model,
+          channelCount: laser.channelCount,
+          colorMode: laser.colorMode,
+          scanTier: laser.scanTier,
+          features: laser.specialFeatures,
+          availableColors: laser.availableColors,
+        }),
+      });
+      if (!resp.ok || !resp.body) { setAiText("Analysis unavailable."); return; }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.content) setAiText(t => t + data.content);
+            if (data.done || data.error) break;
+          } catch { /* skip malformed */ }
+        }
+      }
+    } catch {
+      setAiText("Could not connect to AI analysis service.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-black/60 border border-zinc-800/60 rounded-sm p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[10px] text-[#00ff9d] uppercase tracking-widest font-bold">
+          <Cpu className="w-3 h-3" /> AI Show Strategy
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={runAnalysis}
+          disabled={loading}
+          className="h-6 text-[10px] px-2 border-zinc-700 text-zinc-400 hover:text-[#00ff9d] hover:border-[#00ff9d]/40 rounded-sm"
+        >
+          {loading ? "Analyzing…" : "Deep Analysis ✦"}
+        </Button>
+      </div>
+
+      {/* Built-in notes (always visible) */}
+      <p className="text-[11px] leading-relaxed text-zinc-400">
+        {laser.strategy.notes}
+      </p>
+
+      {/* AI streaming response */}
+      {expanded && (
+        <div className="border-t border-zinc-800 pt-2 space-y-1">
+          <div className="text-[10px] text-zinc-600 uppercase tracking-wider">GPT Expert Analysis</div>
+          <div className="text-[11px] leading-relaxed text-zinc-300 whitespace-pre-wrap max-h-48 overflow-y-auto">
+            {loading && !aiText ? (
+              <span className="text-zinc-600 animate-pulse">Generating laser-specific insights…</span>
+            ) : aiText}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Laser Show Canvas Renderer
+// ─────────────────────────────────────────────────────────────────────────────
+interface LaserCanvasProps {
+  visualStateRef: React.MutableRefObject<VisualState | null>;
+  isPlaying: boolean;
+  laser: LaserModel | null;
+  analyser: AnalyserNode | null;
+}
+
+function LaserCanvas({ visualStateRef, isPlaying, laser, analyser }: LaserCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  
+  const rafRef = useRef<number>(0);
+  const idlePhaseRef = useRef(0);
+  const trailBufferRef = useRef<ImageData | null>(null);
+
   useEffect(() => {
-    if (!analyser || !isPlaying || !canvasRef.current) return;
-    
     const canvas = canvasRef.current;
+    if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-    
-    let animationId: number;
-    
+
+    const resize = () => {
+      canvas.width  = canvas.offsetWidth  * window.devicePixelRatio;
+      canvas.height = canvas.offsetHeight * window.devicePixelRatio;
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
+
     const draw = () => {
-      animationId = requestAnimationFrame(draw);
-      analyser.getByteFrequencyData(dataArray);
-      
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      const barWidth = (canvas.width / bufferLength) * 2.5;
-      let x = 0;
-      
-      for (let i = 0; i < bufferLength; i++) {
-        const barHeight = (dataArray[i] / 255) * canvas.height;
-        
-        // Color gradient based on frequency
-        const hue = i * (360 / bufferLength);
-        ctx.fillStyle = `hsla(${hue}, 100%, 50%, 0.8)`;
-        ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-        
-        x += barWidth + 1;
+      rafRef.current = requestAnimationFrame(draw);
+      const W = canvas.width;
+      const H = canvas.height;
+      const vs = visualStateRef.current;
+
+      // ── Background with motion blur/trail ─────────────────────────
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = "#000008";
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+
+      if (!isPlaying || !vs) {
+        // Idle animation — slow spinning circle in the laser's color
+        idlePhaseRef.current += 0.008;
+        const t = idlePhaseRef.current;
+        const cx = W / 2;
+        const cy = H / 2;
+        const r  = Math.min(W, H) * 0.28;
+        const color = laser ? laserIdleColor(laser) : "#00ff9d";
+        drawLissajous(ctx, cx, cy, r, 1, 1, Math.PI / 2, t * 0.4, color, 0.5 + Math.sin(t) * 0.3, false);
+        // Scan dot
+        const dotX = cx + Math.cos(t * 2) * r * 0.9;
+        const dotY = cy + Math.sin(t * 2) * r * 0.9;
+        ctx.beginPath();
+        ctx.arc(dotX, dotY, 2.5 * window.devicePixelRatio, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = color;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        // Label
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = "#ffffff";
+        ctx.font = `${11 * window.devicePixelRatio}px monospace`;
+        ctx.textAlign = "center";
+        ctx.fillText(laser ? `${laser.brand} ${laser.model}` : "LOAD LASER + MUSIC", cx, H - 20 * window.devicePixelRatio);
+        ctx.globalAlpha = 1;
+        return;
+      }
+
+      // ── Live show rendering ───────────────────────────────────────
+      const cx = W / 2;
+      const cy = H / 2;
+      const baseR = Math.min(W, H) * 0.38 * vs.zoom;
+      const color = `rgb(${Math.round(vs.red * 255)},${Math.round(vs.green * 255)},${Math.round(vs.blue * 255)})`;
+
+      // Strobe: full clear on strobe frames
+      if (vs.strobe && Math.random() > 0.4) {
+        ctx.globalAlpha = 0.95;
+        ctx.fillStyle = "#000000";
+        ctx.fillRect(0, 0, W, H);
+        ctx.globalAlpha = 1;
+        return;
+      }
+
+      // Fog glow at laser position
+      const fogX = cx + (vs.xNorm - 0.5) * W * 0.4;
+      const fogY = cy + (vs.yNorm - 0.5) * H * 0.4;
+      const fogGrad = ctx.createRadialGradient(fogX, fogY, 0, fogX, fogY, Math.min(W, H) * 0.4);
+      fogGrad.addColorStop(0, `rgba(${Math.round(vs.red * 30)},${Math.round(vs.green * 60)},${Math.round(vs.blue * 40)},0.06)`);
+      fogGrad.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = fogGrad;
+      ctx.fillRect(0, 0, W, H);
+
+      // Primary Lissajous pattern
+      const [a, b, delta] = LISSAJOUS_PRESETS[vs.patternIndex % LISSAJOUS_PRESETS.length];
+      const patternX = cx + (vs.xNorm - 0.5) * W * 0.15;
+      const patternY = cy + (vs.yNorm - 0.5) * H * 0.15;
+      const animOffset = performance.now() / 1000;
+      drawLissajous(ctx, patternX, patternY, baseR, a, b, delta, animOffset, color, vs.energy, true);
+
+      // Grating: additional beam fans
+      if (vs.gratingActive) {
+        const fanCount = laser?.scanTier === "pro" ? 5 : laser?.scanTier === "fast" ? 3 : 2;
+        for (let i = 0; i < fanCount; i++) {
+          const angle = vs.rotation + (i / fanCount) * Math.PI;
+          const fanX = cx + Math.cos(angle) * W * 0.2;
+          const fanY = cy + Math.sin(angle) * H * 0.2;
+          const fanR = baseR * 0.55;
+          const dim = 0.4 + (i % 2) * 0.2;
+          drawLissajous(ctx, fanX, fanY, fanR, a, b, delta + i * 0.8, animOffset, color, vs.energy * dim, false);
+        }
+      }
+
+      // Energy flash at peaks
+      if (vs.energy > 0.85) {
+        const flash = (vs.energy - 0.85) / 0.15;
+        ctx.globalAlpha = flash * 0.07;
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, W, H);
+        ctx.globalAlpha = 1;
+      }
+
+      // Spectrum bar at bottom (if analyser available)
+      if (analyser) {
+        const freqData = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(freqData);
+        const barW = W / freqData.length;
+        ctx.globalAlpha = 0.25;
+        for (let i = 0; i < freqData.length; i++) {
+          const barH = (freqData[i] / 255) * H * 0.08;
+          const hue = (i / freqData.length) * 240;
+          ctx.fillStyle = `hsl(${hue},100%,60%)`;
+          ctx.fillRect(i * barW, H - barH, barW - 1, barH);
+        }
+        ctx.globalAlpha = 1;
       }
     };
-    
-    draw();
-    
-    return () => cancelAnimationFrame(animationId);
-  }, [analyser, isPlaying]);
-  
+
+    rafRef.current = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      ro.disconnect();
+    };
+  }, [isPlaying, laser, analyser]);
+
   return (
-    <canvas 
-      ref={canvasRef} 
-      width={800} 
-      height={200} 
-      className="absolute inset-0 w-full h-full opacity-60" 
-      data-testid="canvas-spectrum"
+    <canvas
+      ref={canvasRef}
+      data-testid="canvas-laser"
+      className="w-full"
+      style={{ height: "clamp(320px, 45vh, 540px)", display: "block" }}
     />
   );
 }
 
-function Meter({ label, value, color, glow }: { label: string, value: number, color: string, glow: string }) {
-  const pct = Math.min(100, Math.max(0, value * 100));
+// ─────────────────────────────────────────────────────────────────────────────
+// Lissajous beam draw helper
+// ─────────────────────────────────────────────────────────────────────────────
+function drawLissajous(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number,
+  radius: number,
+  a: number, b: number, delta: number,
+  timeOffset: number,
+  color: string,
+  energy: number,
+  glow: boolean
+) {
+  const steps = 600;
+  const dpr = window.devicePixelRatio;
+  ctx.save();
+
+  if (glow) {
+    ctx.shadowBlur  = (12 + energy * 20) * dpr;
+    ctx.shadowColor = color;
+  }
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = (1.2 + energy * 1.2) * dpr;
+  ctx.globalAlpha = 0.55 + energy * 0.35;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * Math.PI * 2 + timeOffset * 0.12;
+    const x = cx + radius * Math.sin(a * t + delta);
+    const y = cy + radius * Math.sin(b * t);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Bright inner core
+  if (glow) {
+    ctx.shadowBlur  = (4 + energy * 8) * dpr;
+    ctx.lineWidth   = (0.4 + energy * 0.5) * dpr;
+    ctx.globalAlpha = 0.8 + energy * 0.2;
+    ctx.strokeStyle = "#ffffff";
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * Math.PI * 2 + timeOffset * 0.12;
+      const x = cx + radius * Math.sin(a * t + delta);
+      const y = cy + radius * Math.sin(b * t);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function Meter({ label, value, color }: { label: string; value: number; color: string }) {
+  const pct = Math.min(100, value * 100);
   return (
-    <div className="space-y-2">
-      <div className="flex justify-between text-xs font-bold text-zinc-500">
+    <div className="space-y-1">
+      <div className="flex justify-between text-[10px] font-bold text-zinc-500">
         <span>{label}</span>
         <span className="font-mono text-zinc-400">{pct.toFixed(0)}%</span>
       </div>
-      <div className="h-4 bg-black border border-zinc-800 rounded-sm overflow-hidden relative">
-        <div 
-          className={cn("absolute top-0 left-0 bottom-0 transition-all duration-75", color, pct > 50 && glow)}
-          style={{ width: `${pct}%` }}
+      <div className="h-2 bg-zinc-900 border border-zinc-800 rounded-full overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-75"
+          style={{ width: `${pct}%`, backgroundColor: color, boxShadow: `0 0 6px ${color}` }}
         />
       </div>
     </div>
   );
 }
 
-// --- Helpers ---
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
-function getChannelName(profile: LaserProfile, idx: number) {
-  if (profile === "eytse-16") {
-    const names = [
-      "Mode", "Anim Bank", "Pattern", "Pattern Sub", 
-      "X-Pos", "Y-Pos", "Rotation", "Rot Sub", 
-      "Zoom", "Zoom Sub", "Strobe", "Red", 
-      "Green", "Blue", "Grating", "Grating Rot"
-    ];
-    return names[idx] || `CH${idx+1}`;
-  } else if (profile === "generic-7") {
-    const names = [
-      "Mode", "Pattern", "Strobe", "Zoom", 
-      "X-Pos", "Y-Pos", "Color"
-    ];
-    return names[idx] || `CH${idx+1}`;
-  }
-  return `CH${idx+1}`;
+function colorNameToHex(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("red"))     return "#ff2200";
+  if (n.includes("green"))   return "#00ff44";
+  if (n.includes("blue"))    return "#0044ff";
+  if (n.includes("yellow"))  return "#ffee00";
+  if (n.includes("cyan"))    return "#00ffee";
+  if (n.includes("magenta")) return "#ff00cc";
+  if (n.includes("white"))   return "#ffffff";
+  if (n.includes("orange"))  return "#ff8800";
+  return "#888888";
+}
+
+function laserIdleColor(laser: LaserModel): string {
+  if (laser.colorMode === "rg")       return "#44ff44";
+  if (laser.colorMode === "rgy")      return "#ffee00";
+  if (laser.colorMode === "rgb-full") return "#00ff9d";
+  return "#00ff9d";
 }

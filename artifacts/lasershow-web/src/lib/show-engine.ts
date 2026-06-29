@@ -1,0 +1,298 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// AI LaserShow — Expert Show Generation Engine
+//
+// Generates 40Hz DMX channel arrays from audio envelopes using laser-specific
+// strategies. Each laser profile carries its own automation rules; this engine
+// interprets them with deep knowledge of laser physics and show design.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { LaserModel } from "./laser-database";
+
+export interface AudioFrame {
+  bass: number;   // 0–1
+  mid: number;    // 0–1
+  high: number;   // 0–1
+  bpm: number;
+  timeS: number;  // absolute playback position in seconds
+}
+
+export interface ShowFrame {
+  channels: number[];   // DMX values, 0–255, length = laser.channelCount
+  visualState: VisualState;
+}
+
+export interface VisualState {
+  // Derived visual parameters for the canvas renderer
+  xNorm: number;       // 0–1 normalized X position
+  yNorm: number;       // 0–1 normalized Y position
+  rotation: number;    // radians
+  zoom: number;        // 0–1
+  red: number;         // 0–1
+  green: number;       // 0–1
+  blue: number;        // 0–1
+  strobe: boolean;
+  patternIndex: number; // which Lissajous ratio preset
+  gratingActive: boolean;
+  energy: number;      // 0–1 overall energy
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lissajous pattern presets
+// Each entry: [a, b, delta] for x=sin(a*t+d), y=sin(b*t)
+// ─────────────────────────────────────────────────────────────────────────────
+export const LISSAJOUS_PRESETS = [
+  [1, 1, Math.PI / 2],   // 0: Circle
+  [2, 1, Math.PI / 2],   // 1: Figure-8 vertical
+  [1, 2, Math.PI / 2],   // 2: Figure-8 horizontal
+  [3, 2, Math.PI / 4],   // 3: Three-leaf
+  [2, 3, Math.PI / 4],   // 4: Complex 2:3
+  [3, 1, Math.PI / 2],   // 5: Pretzel
+  [4, 3, Math.PI / 4],   // 6: Dense 4:3
+  [5, 4, Math.PI / 6],   // 7: Ultra dense
+  [1, 1, 0],             // 8: Diagonal line
+  [2, 2, Math.PI / 4],   // 9: Square spiral
+  [3, 3, Math.PI / 6],   // 10: Star burst
+  [4, 1, Math.PI / 2],   // 11: Complex horizontal
+];
+
+// Map of pattern step beats → number of presets to use (simpler on budget gear)
+const BUDGET_PATTERN_POOL = [0, 1, 2, 8, 9];
+const MID_PATTERN_POOL    = [0, 1, 2, 3, 4, 5, 8, 9, 10];
+const PRO_PATTERN_POOL    = LISSAJOUS_PRESETS.map((_, i) => i);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stateful show engine
+// ─────────────────────────────────────────────────────────────────────────────
+
+export class ShowEngine {
+  private laser: LaserModel;
+  private patternPool: number[];
+  private currentPatternIdx = 0;
+  private lastPatternShiftBeat = -1;
+  private currentBeat = 0;
+  private phaseAccumulator = 0;      // BPM-locked phase in radians
+  private zoomDecay = 0;             // for smooth zoom decay after bass snap
+  private bankIndex = 0;             // current animation bank (0–3)
+  private lastBankShiftPhrase = -1;
+  private energyHistory: number[] = [];
+  private phraseCount = 0;
+
+  constructor(laser: LaserModel) {
+    this.laser = laser;
+    this.patternPool =
+      laser.scanTier === "pro" ? PRO_PATTERN_POOL :
+      laser.scanTier === "fast" ? MID_PATTERN_POOL :
+      laser.scanTier === "mid" ? MID_PATTERN_POOL :
+      BUDGET_PATTERN_POOL;
+  }
+
+  /**
+   * Compute one DMX frame from the current audio state.
+   * Called every 25ms (40Hz).
+   */
+  compute(frame: AudioFrame): ShowFrame {
+    const { bass, mid, high, bpm, timeS } = frame;
+    const strategy = this.laser.strategy;
+
+    // ── Phase / beat tracking ─────────────────────────────────────────────
+    const beatDuration = 60 / bpm;
+    const beatsPerTick = (1 / 40) / beatDuration;
+    this.phaseAccumulator += beatsPerTick * Math.PI * 2;
+    const absoluteBeat = Math.floor(timeS / beatDuration);
+    const beatPhase = (timeS % beatDuration) / beatDuration; // 0–1 within beat
+    const phraseLength = 8; // 8-beat phrase
+    const phraseIndex = Math.floor(absoluteBeat / phraseLength);
+
+    // ── Energy tracking ───────────────────────────────────────────────────
+    const energy = (bass * 0.5 + mid * 0.3 + high * 0.2);
+    this.energyHistory.push(energy);
+    if (this.energyHistory.length > 160) this.energyHistory.shift(); // 4 seconds
+    const avgEnergy = this.energyHistory.reduce((a, b) => a + b, 0) / this.energyHistory.length;
+    const energyRatio = avgEnergy > 0 ? Math.min(2, energy / avgEnergy) : 1;
+
+    // ── Pattern stepping ──────────────────────────────────────────────────
+    const shiftBeats = strategy.patternShiftBeats;
+    if (absoluteBeat > 0 && absoluteBeat % shiftBeats === 0 && absoluteBeat !== this.lastPatternShiftBeat) {
+      this.lastPatternShiftBeat = absoluteBeat;
+      this.currentPatternIdx = (this.currentPatternIdx + 1) % this.patternPool.length;
+      // On energy spike, skip an extra pattern for surprise
+      if (energy > 0.8 && Math.random() > 0.5) {
+        this.currentPatternIdx = (this.currentPatternIdx + 1) % this.patternPool.length;
+      }
+    }
+    const patternIndex = this.patternPool[this.currentPatternIdx];
+
+    // ── Animation bank shift (every 4 phrases) ────────────────────────────
+    if (phraseIndex > 0 && phraseIndex % 4 === 0 && phraseIndex !== this.lastBankShiftPhrase) {
+      this.lastBankShiftPhrase = phraseIndex;
+      this.bankIndex = (this.bankIndex + 1) % 4;
+    }
+
+    // ── Movement (X/Y) ───────────────────────────────────────────────────
+    let xNorm: number;
+    let yNorm: number;
+
+    if (strategy.movementStyle === "lissajous") {
+      // BPM-phase Lissajous movement
+      const [a, b, delta] = LISSAJOUS_PRESETS[patternIndex % LISSAJOUS_PRESETS.length];
+      const t = this.phaseAccumulator;
+      xNorm = (Math.sin(a * t + delta) * 0.5 + 0.5);
+      yNorm = (Math.sin(b * t) * 0.5 + 0.5);
+    } else if (strategy.movementStyle === "sweep") {
+      // Pendulum sweep
+      xNorm = (Math.sin(this.phaseAccumulator) * 0.5 + 0.5);
+      yNorm = (Math.sin(this.phaseAccumulator * 0.7 + Math.PI / 4) * 0.5 + 0.5);
+    } else if (strategy.movementStyle === "bounce") {
+      // Hard bounce with easing
+      const t = beatPhase;
+      xNorm = Math.abs(Math.sin(this.phaseAccumulator * 1.3));
+      yNorm = Math.abs(Math.sin(this.phaseAccumulator * 0.9 + 1));
+    } else {
+      // step: position changes on beat
+      xNorm = beatPhase < 0.5 ? 0.3 : 0.7;
+      yNorm = (absoluteBeat % 4) / 3;
+    }
+
+    // ── Rotation ──────────────────────────────────────────────────────────
+    const rotation = this.phaseAccumulator * 0.5 + mid * Math.PI;
+
+    // ── Zoom with bass snap + exponential decay ───────────────────────────
+    let zoomNorm: number;
+    if (strategy.zoomOnBass && bass > strategy.bassThreshold) {
+      this.zoomDecay = 1.0; // snap to max
+    }
+    this.zoomDecay *= 0.94; // decay ~6% per frame (smooth fall)
+    zoomNorm = 0.39 + this.zoomDecay * 0.61; // range 0.39–1.0 (maps to 100–255)
+
+    // ── Color ─────────────────────────────────────────────────────────────
+    let red = 0, green = 0, blue = 0;
+
+    if (strategy.colorMode === "rgb-full") {
+      // Deep RGB matrix — each band drives a primary color
+      red   = Math.pow(bass, 0.6);    // bass → red (non-linear for punch)
+      green = Math.pow(mid, 0.7);     // mid  → green
+      blue  = Math.pow(high, 0.65);   // high → blue
+
+      // White flash on simultaneous peaks
+      if (bass > 0.75 && mid > 0.6 && high > 0.5) {
+        const whiteBoost = Math.min(1, (bass + mid + high - 1.85) * 2);
+        red   = Math.min(1, red   + whiteBoost * 0.4);
+        green = Math.min(1, green + whiteBoost * 0.4);
+        blue  = Math.min(1, blue  + whiteBoost * 0.4);
+      }
+
+      // Color temperature shift: warm on high energy (more red/green), cool at rest
+      if (avgEnergy > 0.55) {
+        red   = Math.min(1, red   * 1.15);
+        green = Math.min(1, green * 1.05);
+      }
+
+    } else if (strategy.colorMode === "rgy") {
+      // RGY matrix: red=bass, green=mid baseline, yellow=mid peak
+      red   = Math.pow(bass, 0.7);
+      green = Math.pow(mid, 0.8) * (1 - bass * 0.5); // green fades when bass dominates
+      blue  = 0; // no blue diode
+      // Yellow = red+green together on mid peaks
+      if (mid > 0.65) {
+        red   = Math.min(1, red   + mid * 0.4);
+        green = Math.min(1, green + mid * 0.3);
+      }
+
+    } else if (strategy.colorMode === "rg") {
+      // Red/Green only — alternating with energy
+      if (bass > mid) {
+        red = Math.pow(bass, 0.6);
+        green = Math.pow(mid, 0.9) * 0.4;
+      } else {
+        green = Math.pow(mid, 0.6);
+        red = Math.pow(bass, 0.9) * 0.4;
+      }
+      blue = 0;
+
+    } else {
+      // Indexed — not directly controllable per-color
+      red = energy; green = energy * 0.5; blue = energy * 0.8;
+    }
+
+    // ── Strobe ────────────────────────────────────────────────────────────
+    const strobe = strategy.strobeOnHigh && high > 0.75 && energy > 0.65;
+
+    // ── Grating ───────────────────────────────────────────────────────────
+    const gratingActive = energy > 0.65 && energy > avgEnergy * 1.1;
+
+    // ── Build DMX channels ────────────────────────────────────────────────
+    const channels = new Array(this.laser.channelCount).fill(0);
+    const map = this.laser.channelMap;
+
+    const fn = (fnKey: string): number => {
+      const def = map.find(c => c.fn === fnKey);
+      return def ? def.ch - 1 : -1; // 0-indexed
+    };
+
+    const set = (fnKey: string, value: number) => {
+      const idx = fn(fnKey);
+      if (idx >= 0) channels[idx] = Math.round(Math.min(255, Math.max(0, value)));
+    };
+
+    // Mode — always locked to DMX control
+    set("mode", 120);
+
+    // Animation bank
+    set("animBank", this.bankIndex * 63);
+
+    // Pattern — maps to pattern bank value
+    const patternVal = (patternIndex / (LISSAJOUS_PRESETS.length - 1)) * 200 + 20;
+    set("patternLo", patternVal);
+    set("pattern",  patternVal);
+    set("patternHi", 0);
+
+    // X/Y
+    set("xPos", xNorm * 255);
+    set("yPos", yNorm * 255);
+
+    // Rotation
+    const rotVal = ((rotation % (Math.PI * 2)) / (Math.PI * 2)) * 255;
+    set("rotation",  rotVal);
+    set("rotSpeed",  0);
+
+    // Zoom
+    set("zoom", zoomNorm * 255);
+    set("size", zoomNorm * 220);
+
+    // Strobe
+    set("strobe", strobe ? Math.round(50 + high * 170) : 0);
+
+    // Colors
+    set("red",   red   * 255);
+    set("green", green * 255);
+    set("blue",  blue  * 255);
+
+    // Grating
+    set("grating",    gratingActive ? Math.round(120 + energy * 135) : 0);
+    set("gratingRot", gratingActive ? Math.round(rotVal * 0.5) : 0);
+
+    // Indexed color (for 7-ch color channel)
+    if (strategy.colorMode === "indexed") {
+      const colorIdx = Math.round((timeS * 0.1 * 255) % 255);
+      set("color", colorIdx);
+    }
+
+    // ── Visual state for canvas renderer ─────────────────────────────────
+    const visualState: VisualState = {
+      xNorm, yNorm, rotation, zoom: zoomNorm,
+      red, green, blue, strobe, patternIndex, gratingActive, energy,
+    };
+
+    return { channels, visualState };
+  }
+
+  reset() {
+    this.currentPatternIdx = 0;
+    this.lastPatternShiftBeat = -1;
+    this.phaseAccumulator = 0;
+    this.zoomDecay = 0;
+    this.bankIndex = 0;
+    this.lastBankShiftPhrase = -1;
+    this.energyHistory = [];
+  }
+}
