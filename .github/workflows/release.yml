@@ -61,4 +61,3 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
           projectPath: laser-show
-          iconPath: laser-show/src-tauri/icons/icon.png
