@@ -1718,6 +1718,70 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
           ctx.fill();
         }
         ctx.restore();
+
+        // ── Geometric drone-formation frame around text ───────────────
+        // Slowly orbiting hexagon + corner diamonds that "surround" the text
+        // like a drone formation holding position around the word.
+        {
+          const dpr = window.devicePixelRatio;
+          const t = animOffset;
+          const frameR = Math.min(W, H) * 0.42; // radius of the orbit ring
+          const hexSides = 6;
+          const rotSpeed = 0.06; // very slow — drone-formation pacing
+          const rot = t * rotSpeed * Math.PI * 2;
+
+          // Outer hexagon outline
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(rot);
+          ctx.beginPath();
+          for (let s = 0; s <= hexSides; s++) {
+            const a = (s / hexSides) * Math.PI * 2;
+            const px = Math.cos(a) * frameR;
+            const py = Math.sin(a) * frameR * 0.55; // flatten into an ellipse for perspective
+            s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = 1.2 * dpr;
+          ctx.shadowBlur  = 14 * dpr;
+          ctx.shadowColor = color;
+          ctx.globalAlpha = 0.35 + vs.energy * 0.2;
+          ctx.stroke();
+
+          // 6 node dots at each vertex — like formation drones holding position
+          for (let s = 0; s < hexSides; s++) {
+            const a = (s / hexSides) * Math.PI * 2;
+            const px = Math.cos(a) * frameR;
+            const py = Math.sin(a) * frameR * 0.55;
+            ctx.beginPath();
+            ctx.arc(px, py, 3.5 * dpr, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffffff";
+            ctx.shadowBlur  = 10 * dpr;
+            ctx.shadowColor = color;
+            ctx.globalAlpha = 0.7 + vs.energy * 0.25;
+            ctx.fill();
+          }
+
+          // Inner ring — counter-rotates for depth
+          const innerR = frameR * 0.65;
+          ctx.rotate(-rot * 2); // counter-rotate
+          ctx.beginPath();
+          for (let s = 0; s <= hexSides; s++) {
+            const a = (s / hexSides) * Math.PI * 2;
+            const px = Math.cos(a) * innerR;
+            const py = Math.sin(a) * innerR * 0.55;
+            s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = 0.7 * dpr;
+          ctx.globalAlpha = 0.18 + vs.energy * 0.12;
+          ctx.shadowBlur  = 8 * dpr;
+          ctx.stroke();
+
+          ctx.restore();
+        }
       }
 
       // ── Scene transition visual effects ──────────────────────────────
