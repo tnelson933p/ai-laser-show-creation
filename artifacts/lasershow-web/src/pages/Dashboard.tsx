@@ -90,6 +90,8 @@ export default function Dashboard() {
 
   // Synchronous updater — updates the ref immediately so the 40Hz loops never
   // read a stale override (don't rely on React's async render cycle for this).
+  const LS_OVERRIDES_KEY = "ai-lasershow-overrides-v1";
+
   const applyOverrides = (next: ShowOverrides) => {
     const { sequence, ...rest } = next;
     if (sequence !== undefined) {
@@ -97,16 +99,21 @@ export default function Dashboard() {
       setShowSequence(sequence);
       lastActiveSceneRef.current = null; // force scene re-detection on next loop
     } else if (Object.keys(next).length === 0) {
-      // Full reset — clear sequence too
+      // Full reset — clear sequence too, and clear persistence
       sequenceRef.current = [];
       setShowSequence([]);
       setActiveSceneIdx(-1);
       activeSceneDisplayRef.current = null;
       lastActiveSceneRef.current = null;
       sceneTransitionRef.current = null;
+      try { localStorage.removeItem(LS_OVERRIDES_KEY); } catch {}
     }
     showOverridesRef.current = rest;
     setShowOverrides(rest);
+    // Persist non-empty AI shows so HMR / refresh never wipes them
+    if (Object.keys(next).length > 0) {
+      try { localStorage.setItem(LS_OVERRIDES_KEY, JSON.stringify(next)); } catch {}
+    }
   };
 
   // Music transitions
@@ -134,10 +141,18 @@ export default function Dashboard() {
   useEffect(() => { currentTrackIdxRef.current = currentTrackIdx; }, [currentTrackIdx]);
 
 
-  // Init
+  // Init — restore persisted AI show so HMR / hard reload never loses it
   useEffect(() => {
     document.documentElement.classList.add("dark");
     if (!("serial" in navigator)) setWebSerialSupported(false);
+    try {
+      const saved = localStorage.getItem("ai-lasershow-overrides-v1");
+      if (saved) {
+        const overrides = JSON.parse(saved) as ShowOverrides;
+        applyOverrides(overrides);
+      }
+    } catch { /* corrupt storage — ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Resolve laser model
@@ -147,7 +162,8 @@ export default function Dashboard() {
     if (found) {
       engineRef.current = new ShowEngine(found);
     }
-    applyOverrides({});
+    // Do NOT reset overrides here — the AI-designed show is independent of
+    // which laser model is selected; switching models would otherwise wipe it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBrand, selectedModel]);
 
@@ -1632,28 +1648,26 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
 
       const [a, b, delta] = LISSAJOUS_PRESETS[vs.patternIndex % LISSAJOUS_PRESETS.length];
 
+      // Beam is hidden during text; faint atmosphere during animations; full during pure Lissajous scenes
+      const beamAlpha = hasAnimation ? 0.18 : 1.0;
+
       if (!hasText) {
-        // Reduce beam opacity dramatically when animation is running (it becomes background atmosphere)
-        const beamAlpha = hasAnimation ? 0.18 : 1.0;
         ctx.save();
-        ctx.globalAlpha = beamAlpha;
         ctx.translate(patternX, patternY);
         ctx.rotate(vs.rotation * 0.3);
-        drawLissajous(ctx, 0, 0, baseR, a, b, delta, animOffset, color, vs.energy, true);
+        drawLissajous(ctx, 0, 0, baseR, a, b, delta, animOffset, color, vs.energy, true, beamAlpha);
 
-        // Mirror beam — only draw when no animation is competing for attention
+        // Mirror beam — only when no animation is competing for attention
         if (!hasAnimation && vs.energy > 0.3) {
-          drawLissajous(ctx, 0, 0, baseR * 0.7, a, b, delta + Math.PI * 0.25, animOffset + 0.4, color, vs.energy * 0.5, false);
+          drawLissajous(ctx, 0, 0, baseR * 0.7, a, b, delta + Math.PI * 0.25, animOffset + 0.4, color, vs.energy * 0.5, false, 1.0);
         }
         ctx.restore();
       }
 
-      // ── Grating: fan beams — only when no text is showing ────────
+      // ── Grating: fan beams — hidden during text, faint during animation ──
       if (vs.gratingActive && !hasText) {
-        const fanCount = laser?.scanTier === "pro" ? 6 : laser?.scanTier === "fast" ? 4 : 3;
         const fanAlpha = hasAnimation ? 0.25 : 1.0;
-        ctx.save();
-        ctx.globalAlpha = fanAlpha;
+        const fanCount = laser?.scanTier === "pro" ? 6 : laser?.scanTier === "fast" ? 4 : 3;
         for (let i = 0; i < fanCount; i++) {
           const angle = vs.rotation + (i / fanCount) * Math.PI * 2;
           const spread = Math.min(W, H) * 0.3;
@@ -1661,9 +1675,8 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
           const fanY = cy + Math.sin(angle) * spread;
           const fanR = baseR * 0.45;
           const dim = 0.5 + (i % 2) * 0.25;
-          drawLissajous(ctx, fanX, fanY, fanR, a, b, delta + i * 1.1, animOffset, color, vs.energy * dim, false);
+          drawLissajous(ctx, fanX, fanY, fanR, a, b, delta + i * 1.1, animOffset, color, vs.energy * dim, false, fanAlpha);
         }
-        ctx.restore();
       }
 
       // ── Energy flash: color wash at peaks ────────────────────────
@@ -2077,7 +2090,8 @@ function drawLissajous(
   timeOffset: number,
   color: string,
   energy: number,
-  glow: boolean
+  glow: boolean,
+  alphaMultiplier: number = 1
 ) {
   const steps = 600;
   const dpr = window.devicePixelRatio;
@@ -2090,7 +2104,7 @@ function drawLissajous(
 
   ctx.strokeStyle = color;
   ctx.lineWidth   = (1.2 + energy * 1.2) * dpr;
-  ctx.globalAlpha = 0.55 + energy * 0.35;
+  ctx.globalAlpha = (0.55 + energy * 0.35) * alphaMultiplier;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
@@ -2107,7 +2121,7 @@ function drawLissajous(
   if (glow) {
     ctx.shadowBlur  = (4 + energy * 8) * dpr;
     ctx.lineWidth   = (0.4 + energy * 0.5) * dpr;
-    ctx.globalAlpha = 0.8 + energy * 0.2;
+    ctx.globalAlpha = (0.8 + energy * 0.2) * alphaMultiplier;
     ctx.strokeStyle = "#ffffff";
     ctx.beginPath();
     for (let i = 0; i <= steps; i++) {
