@@ -81,6 +81,12 @@ export default function Dashboard() {
   const lastActiveSceneRef = useRef<SceneSettings | null>(null);
   // Shared with LaserCanvas (ref so canvas reads it without re-renders)
   const activeSceneDisplayRef = useRef<{ label: string; changedAt: number } | null>(null);
+  // Transition: set when scene changes, read by dmxLoop (blending) + canvas (visuals)
+  const sceneTransitionRef = useRef<{
+    fromScene: SceneSettings;
+    startedAt: number;
+    durationMs: number;
+  } | null>(null);
 
   // Synchronous updater — updates the ref immediately so the 40Hz loops never
   // read a stale override (don't rely on React's async render cycle for this).
@@ -97,6 +103,7 @@ export default function Dashboard() {
       setActiveSceneIdx(-1);
       activeSceneDisplayRef.current = null;
       lastActiveSceneRef.current = null;
+      sceneTransitionRef.current = null;
     }
     showOverridesRef.current = rest;
     setShowOverrides(rest);
@@ -395,9 +402,17 @@ export default function Dashboard() {
       // After all scenes end — hold the last scene
       if (!activeScene) { activeScene = seq[seq.length - 1]; sceneIdx = seq.length - 1; }
 
-      // Detect scene change → update display ref + React state for timeline UI
+      // Detect scene change → start transition + update display ref + timeline
       if (activeScene !== lastActiveSceneRef.current) {
+        const prevScene = lastActiveSceneRef.current;
         lastActiveSceneRef.current = activeScene;
+        if (prevScene) {
+          sceneTransitionRef.current = {
+            fromScene: prevScene,
+            startedAt: performance.now(),
+            durationMs: 2400, // 2.4 s smooth crossfade
+          };
+        }
         activeSceneDisplayRef.current = {
           label: activeScene.label ?? `SCENE ${sceneIdx + 1}`,
           changedAt: performance.now(),
@@ -406,8 +421,41 @@ export default function Dashboard() {
       }
 
       const { durationBars: _d, label: _l, ...sceneOverrides } = activeScene;
-      // Scene settings fully replace base overrides for every field it defines
       activeOverrides = { ...showOverridesRef.current, ...sceneOverrides };
+
+      // ── Transition blending: smoothly interpolate numeric + discrete params ──
+      const tr = sceneTransitionRef.current;
+      if (tr) {
+        const rawT = Math.min(1, (performance.now() - tr.startedAt) / tr.durationMs);
+        if (rawT >= 1) {
+          sceneTransitionRef.current = null;
+        } else {
+          // Ease in-out cubic
+          const t = rawT < 0.5 ? 4 * rawT ** 3 : 1 - (-2 * rawT + 2) ** 3 / 2;
+          const { durationBars: _fd, label: _fl, ...from } = tr.fromScene;
+          const lp = (a: number, b: number, dflt: number) =>
+            (a ?? dflt) + ((b ?? dflt) - (a ?? dflt)) * t;
+          // Swap discrete string/bool values at the midpoint
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sw = <T,>(a: T, b: T): T => (t < 0.5 ? a : b);
+          activeOverrides = {
+            ...activeOverrides,
+            // Numeric — continuously lerped
+            colorIntensity: lp(from.colorIntensity ?? 1,   activeOverrides.colorIntensity ?? 1,   1),
+            movementSpeed:  lp(from.movementSpeed  ?? 1,   activeOverrides.movementSpeed  ?? 1,   1),
+            bassThreshold:  lp(from.bassThreshold  ?? 0.4, activeOverrides.bassThreshold  ?? 0.4, 0.4),
+            // Discrete — switch at t=0.5 so each half belongs fully to one scene
+            movementStyle:   sw(from.movementStyle   ?? "lissajous", activeOverrides.movementStyle   ?? "lissajous"),
+            animationStyle:  sw(from.animationStyle  ?? "none",      activeOverrides.animationStyle  ?? "none"),
+            patternComplexity: sw(from.patternComplexity ?? "medium",  activeOverrides.patternComplexity ?? "medium"),
+            strobeEnabled:   sw(from.strobeEnabled  ?? false, activeOverrides.strobeEnabled  ?? false),
+            gratingEnabled:  sw(from.gratingEnabled ?? false, activeOverrides.gratingEnabled ?? false),
+            zoomEnabled:     sw(from.zoomEnabled    ?? false, activeOverrides.zoomEnabled    ?? false),
+            textEnabled:     sw(from.textEnabled    ?? false, activeOverrides.textEnabled    ?? false),
+            textContent:     sw(from.textContent    ?? "",    activeOverrides.textContent    ?? ""),
+          };
+        }
+      }
     }
 
     const result = engineRef.current.compute({ bass, mid, high, bpm, timeS: elapsed }, activeOverrides);
@@ -1018,6 +1066,7 @@ export default function Dashboard() {
               laser={laser}
               analyser={analyserRef.current}
               activeSceneDisplayRef={activeSceneDisplayRef}
+              sceneTransitionRef={sceneTransitionRef}
             />
           </CardContent>
         </Card>
@@ -1483,9 +1532,10 @@ interface LaserCanvasProps {
   laser: LaserModel | null;
   analyser: AnalyserNode | null;
   activeSceneDisplayRef: React.MutableRefObject<{ label: string; changedAt: number } | null>;
+  sceneTransitionRef: React.MutableRefObject<{ fromScene: SceneSettings; startedAt: number; durationMs: number } | null>;
 }
 
-function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDisplayRef }: LaserCanvasProps) {
+function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDisplayRef, sceneTransitionRef }: LaserCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const trailBufferRef = useRef<ImageData | null>(null);
@@ -1511,7 +1561,17 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
       const vs = visualStateRef.current;
 
       // ── Background with motion blur/trail ─────────────────────────
-      ctx.globalAlpha = 0.18;
+      // During a transition: reduce alpha so old trails "ghost" longer,
+      // creating a natural visual crossfade between scenes.
+      let trailAlpha = 0.18;
+      const trTr = sceneTransitionRef.current;
+      if (trTr && isPlaying) {
+        const rawTr = Math.min(1, (performance.now() - trTr.startedAt) / trTr.durationMs);
+        // Bell-shaped alpha reduction — deepest ghost at midpoint (rawTr=0.5)
+        const ghostDepth = Math.sin(rawTr * Math.PI); // 0 → 1 → 0
+        trailAlpha = 0.18 - ghostDepth * 0.13; // bottoms out at 0.05
+      }
+      ctx.globalAlpha = trailAlpha;
       ctx.fillStyle = "#000008";
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
@@ -1656,6 +1716,77 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
           ctx.fill();
         }
         ctx.restore();
+      }
+
+      // ── Scene transition visual effects ──────────────────────────────
+      const canvasTr = sceneTransitionRef.current;
+      if (canvasTr && isPlaying) {
+        const rawTr = Math.min(1, (performance.now() - canvasTr.startedAt) / canvasTr.durationMs);
+        // Ease in-out cubic for smooth feel
+        const eTr = rawTr < 0.5 ? 4 * rawTr ** 3 : 1 - (-2 * rawTr + 2) ** 3 / 2;
+
+        // ① Expanding shockwave ring from center ─────────────────────
+        // Ring grows from r=0 to r=diag over the first 60% of the transition
+        const ringProgress = Math.min(1, rawTr / 0.6);
+        const diag = Math.hypot(W, H);
+        const ringR = ringProgress * diag * 0.55;
+        const ringAlpha = (1 - ringProgress) * 0.65; // fades as it expands
+        if (ringAlpha > 0.01) {
+          const grad = ctx.createRadialGradient(cx, cy, Math.max(0, ringR - 18), cx, cy, ringR + 18);
+          grad.addColorStop(0,   `rgba(0,255,157,0)`);
+          grad.addColorStop(0.4, `rgba(0,255,157,${ringAlpha.toFixed(3)})`);
+          grad.addColorStop(0.6, `rgba(180,255,230,${(ringAlpha * 0.7).toFixed(3)})`);
+          grad.addColorStop(1,   `rgba(0,255,157,0)`);
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, W, H);
+          ctx.restore();
+        }
+
+        // ② Secondary inner pulse ring — slightly delayed, tighter ────
+        const ring2Progress = Math.min(1, Math.max(0, (rawTr - 0.05) / 0.5));
+        const ring2R = ring2Progress * diag * 0.35;
+        const ring2Alpha = (1 - ring2Progress) * 0.4;
+        if (ring2Progress > 0 && ring2Alpha > 0.01) {
+          const g2 = ctx.createRadialGradient(cx, cy, Math.max(0, ring2R - 10), cx, cy, ring2R + 10);
+          g2.addColorStop(0,   `rgba(255,120,255,0)`);
+          g2.addColorStop(0.5, `rgba(255,120,255,${ring2Alpha.toFixed(3)})`);
+          g2.addColorStop(1,   `rgba(255,120,255,0)`);
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.fillStyle = g2;
+          ctx.fillRect(0, 0, W, H);
+          ctx.restore();
+        }
+
+        // ③ Vignette pulse — edges briefly bloom inward then recede ───
+        const vigAlpha = Math.sin(eTr * Math.PI) * 0.35;
+        if (vigAlpha > 0.01) {
+          const vGrad = ctx.createRadialGradient(cx, cy, Math.min(W, H) * 0.2, cx, cy, diag * 0.6);
+          vGrad.addColorStop(0,   `rgba(0,0,0,0)`);
+          vGrad.addColorStop(0.6, `rgba(0,0,0,0)`);
+          vGrad.addColorStop(1,   `rgba(0,255,157,${vigAlpha.toFixed(3)})`);
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.fillStyle = vGrad;
+          ctx.fillRect(0, 0, W, H);
+          ctx.restore();
+        }
+
+        // ④ Brief center flash at the exact moment of switch (rawTr < 0.08) ─
+        if (rawTr < 0.08) {
+          const flashAlpha = (1 - rawTr / 0.08) * 0.45;
+          const fGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(W, H) * 0.4);
+          fGrad.addColorStop(0,   `rgba(255,255,255,${flashAlpha.toFixed(3)})`);
+          fGrad.addColorStop(0.5, `rgba(0,255,157,${(flashAlpha * 0.5).toFixed(3)})`);
+          fGrad.addColorStop(1,   `rgba(0,0,0,0)`);
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.fillStyle = fGrad;
+          ctx.fillRect(0, 0, W, H);
+          ctx.restore();
+        }
       }
 
       // ── Scene flash: name shown briefly when scene changes ───────────
