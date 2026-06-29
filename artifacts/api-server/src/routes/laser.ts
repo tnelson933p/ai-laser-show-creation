@@ -61,7 +61,7 @@ Keep the response focused, expert-level, and under 300 words. Use specific numbe
 
   try {
     const stream = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5-mini",
       max_completion_tokens: 600,
       messages: [
         { role: "system", content: systemPrompt },
@@ -163,33 +163,106 @@ animationCode: string (REQUIRED — write JavaScript that draws the animation)
     • Animate with t: Math.sin(t*speed), (t*freq)%(2*Math.PI), etc.
     • React to music: scale counts/sizes by energy, branch on energy>0.5
     • Use ctx.globalAlpha for brightness variation between sub-elements
-    • Keep code compact — 8 to 25 lines. No async, no DOM, no external refs.
+    • Write AMBITIOUS code — 20 to 60 lines. Intricate layered visuals. Simple = boring.
+    • No async, no DOM, no external refs.
 
-  EXAMPLE PATTERNS — each labeled with minimum scanner requirement:
+  EXAMPLE PATTERNS — study the complexity level, then create your own from scratch:
 
-  // [ALL SCANNERS] Bold starburst — 5 spokes rotating, energy scales radius
-  const spokes=5+Math.round(energy*3);for(let i=0;i<spokes;i++){const a=i/spokes*Math.PI*2+t*.5,r=R*(.5+energy*.3);ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r);ctx.stroke();}ctx.beginPath();ctx.arc(cx,cy,R*.15*(1+energy*.4),0,Math.PI*2);ctx.stroke();
+  // [ALL SCANNERS] Crowd of 8 detailed silhouettes — head+shoulders+torso+arms+legs, bobbing to beat
+  // Each figure: circle head, angled shoulders, torso taper, arms fully raised with elbows, legs spread with feet
+  for(let i=0;i<8;i++){
+    const fx=cx+(i-3.5)*W*.115,bob=Math.sin(t*2.2+i*.7)*R*.05*(1+energy*.6);
+    const fh=R*.72,fy=cy+R*.28+bob;
+    // head
+    ctx.beginPath();ctx.arc(fx,fy-fh*.93,fh*.09,0,Math.PI*2);ctx.stroke();
+    // body: shoulders → waist → hips
+    ctx.beginPath();
+    ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*.22,fy-fh*.78); // shoulder line
+    ctx.moveTo(fx,fy-fh*.78);ctx.lineTo(fx,fy-fh*.38); // spine
+    ctx.moveTo(fx-fh*.16,fy-fh*.38);ctx.lineTo(fx+fh*.16,fy-fh*.38); // hip line
+    ctx.stroke();
+    // arms fully raised overhead with bent elbows
+    const armSwing=Math.sin(t*2.2+i*.7)*(energy>.5?.12:.06);
+    ctx.beginPath();
+    ctx.moveTo(fx-fh*.22,fy-fh*.78);ctx.lineTo(fx-fh*(.32+armSwing),fy-fh*(1.05+energy*.18));
+    ctx.moveTo(fx+fh*.22,fy-fh*.78);ctx.lineTo(fx+fh*(.32-armSwing),fy-fh*(1.05+energy*.18));
+    ctx.stroke();
+    // legs with spread feet
+    ctx.beginPath();
+    ctx.moveTo(fx-fh*.08,fy-fh*.38);ctx.lineTo(fx-fh*.22,fy+fh*.02); // left thigh
+    ctx.moveTo(fx-fh*.22,fy+fh*.02);ctx.lineTo(fx-fh*.28,fy+fh*.38); // left shin+foot
+    ctx.moveTo(fx+fh*.08,fy-fh*.38);ctx.lineTo(fx+fh*.22,fy+fh*.02); // right thigh
+    ctx.moveTo(fx+fh*.22,fy+fh*.02);ctx.lineTo(fx+fh*.28,fy+fh*.38); // right shin+foot
+    ctx.stroke();
+  }
 
-  // [ALL SCANNERS] 3 stick figures with arms raised — simple crowd
-  for(let i=0;i<3;i++){const fx=cx+(i-1)*W*.22,fh=R*.6,fy=cy+R*.2;ctx.beginPath();ctx.arc(fx,fy-fh*.9,fh*.1,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(fx,fy-fh*.75);ctx.lineTo(fx,fy-fh*.35);ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx-fh*.4,fy-fh*(Math.sin(t*2+i)*.05+.85+energy*.1));ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx+fh*.4,fy-fh*(Math.sin(t*2+i+1)*.05+.85+energy*.1));ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx-fh*.18,fy);ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx+fh*.18,fy);ctx.stroke();}
+  // [ALL SCANNERS] City skyline silhouette — buildings of varied heights, windows, animated beacon lights
+  const bldgs=[.35,.55,.42,.7,.48,.62,.38,.52,.65,.44];
+  bldgs.forEach((h,i)=>{
+    const bx=cx-W*.45+i*W*.1,bw=W*.075,bh=H*h*(0.9+energy*.15),by=cy+H*.35;
+    ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx,by-bh);ctx.lineTo(bx+bw,by-bh);ctx.lineTo(bx+bw,by);ctx.stroke();
+    // windows (2 columns per building)
+    for(let row=1;row<=Math.floor(bh/(H*.07));row++){
+      ctx.globalAlpha=.35+energy*.25;ctx.beginPath();
+      ctx.moveTo(bx+bw*.22,by-row*H*.065);ctx.lineTo(bx+bw*.22,by-row*H*.065+H*.04);
+      ctx.moveTo(bx+bw*.62,by-row*H*.065);ctx.lineTo(bx+bw*.62,by-row*H*.065+H*.04);
+      ctx.stroke();
+    }
+    // antenna beacon on tallest buildings
+    if(h>.58){ctx.globalAlpha=.7+energy*.3;ctx.beginPath();ctx.arc(bx+bw*.5,by-bh-R*.06*(1+Math.sin(t*3+i)*.3),R*.025,0,Math.PI*2);ctx.stroke();}
+  });
 
-  // [MID+] Rotating wireframe cube
-  const s=R*.5,ca=Math.cos(t*.5),sa=Math.sin(t*.5),cb=Math.cos(t*.3),sb=Math.sin(t*.3);const p=(x,y,z)=>{const rx=x*ca-z*sa,rz=x*sa+z*ca,ry=y*cb-rz*sb;return[cx+rx*1.8,cy+ry*1.8];};const v=[[-1,-1,-1],[-1,-1,1],[-1,1,-1],[-1,1,1],[1,-1,-1],[1,-1,1],[1,1,-1],[1,1,1]].map(([x,y,z])=>p(x*s,y*s,z*s));[[0,1],[0,2],[1,3],[2,3],[4,5],[4,6],[5,7],[6,7],[0,4],[1,5],[2,6],[3,7]].forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(v[a][0],v[a][1]);ctx.lineTo(v[b][0],v[b][1]);ctx.stroke();});
+  // [MID+] Rotating wireframe cube — all 12 edges with depth shading
+  const s=R*.5,ca=Math.cos(t*.5),sa=Math.sin(t*.5),cb=Math.cos(t*.3),sb=Math.sin(t*.3);
+  const p3=(x,y,z)=>{const rx=x*ca-z*sa,rz=x*sa+z*ca,ry=y*cb-rz*sb;return[cx+rx*1.8,cy+ry*1.8];};
+  const verts=[[-1,-1,-1],[-1,-1,1],[-1,1,-1],[-1,1,1],[1,-1,-1],[1,-1,1],[1,1,-1],[1,1,1]].map(([x,y,z])=>p3(x*s,y*s,z*s));
+  [[0,1],[0,2],[1,3],[2,3],[4,5],[4,6],[5,7],[6,7],[0,4],[1,5],[2,6],[3,7]].forEach(([a,b],ei)=>{
+    ctx.globalAlpha=(.45+energy*.35)*(1-(ei%3)*.12);ctx.beginPath();ctx.moveTo(verts[a][0],verts[a][1]);ctx.lineTo(verts[b][0],verts[b][1]);ctx.stroke();
+  });
+  // central axis glow
+  ctx.globalAlpha=.8+energy*.2;ctx.beginPath();ctx.arc(cx,cy,R*(0.08+energy*.06),0,Math.PI*2);ctx.stroke();
 
-  // [MID+] Pulsing mandala — petals count scaled to scanner budget
-  const petals=4+Math.round(energy*3);for(let i=0;i<petals;i++){const a=i/petals*Math.PI*2+t*.4;ctx.save();ctx.translate(cx,cy);ctx.rotate(a);ctx.beginPath();ctx.ellipse(0,-R*.5,R*.12*(1+energy*.5),R*.3,0,0,Math.PI*2);ctx.stroke();ctx.restore();}ctx.beginPath();ctx.arc(cx,cy,R*.2*(1+energy*.4),0,Math.PI*2);ctx.stroke();
+  // [MID+] Phoenix / bird in flight — wingspan spread, tail plumes, rising with energy
+  const wingSpan=R*(1.1+energy*.35),flap=Math.sin(t*3.5)*0.28;
+  const birdX=cx+Math.sin(t*.4)*R*.5,birdY=cy-energy*R*.3+Math.cos(t*.55)*R*.2;
+  // body
+  ctx.beginPath();ctx.moveTo(birdX-R*.08,birdY);ctx.bezierCurveTo(birdX,birdY-R*.22,birdX,birdY-R*.22,birdX+R*.22,birdY+R*.05);ctx.stroke();
+  // head + beak
+  ctx.beginPath();ctx.arc(birdX+R*.2,birdY+R*.04,R*.05,0,Math.PI*2);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(birdX+R*.25,birdY+R*.04);ctx.lineTo(birdX+R*.34,birdY+R*.04);ctx.stroke();
+  // left wing (3 primary feather strokes)
+  for(let f=0;f<3;f++){ctx.beginPath();ctx.moveTo(birdX,birdY);ctx.bezierCurveTo(birdX-wingSpan*.3-f*R*.1,birdY-R*(.35+flap+f*.08),birdX-wingSpan*.55-f*R*.05,birdY-R*(.1+flap*.5+f*.04),birdX-wingSpan*(0.7+f*.12),birdY+R*(flap*.4+f*.06));ctx.stroke();}
+  // right wing mirror
+  for(let f=0;f<3;f++){ctx.beginPath();ctx.moveTo(birdX,birdY);ctx.bezierCurveTo(birdX+wingSpan*.1+f*R*.05,birdY-R*(.25+flap+f*.06),birdX+wingSpan*.25+f*R*.05,birdY-R*(.08+flap*.4+f*.03),birdX+wingSpan*(0.35+f*.08),birdY+R*(flap*.3+f*.04));ctx.stroke();}
+  // tail plumes rising with energy
+  for(let p=0;p<4;p++){ctx.beginPath();ctx.moveTo(birdX-R*.06,birdY+R*.04);ctx.quadraticCurveTo(birdX-R*(.2+p*.08),birdY+R*(.22+p*.1)+Math.sin(t*2.5+p)*.12*R,birdX-R*(.32+p*.1),birdY+R*(.42+p*.14));ctx.stroke();}
 
-  // [FAST+] DNA double helix (120 points × 2 strands — needs fast/pro scanner)
-  for(let s=0;s<2;s++){ctx.beginPath();for(let i=0;i<=120;i++){const f=i/120,a=f*Math.PI*8+t*.6+s*Math.PI,px=cx+Math.cos(a)*R*.7,py=cy-R*.85+f*R*1.7;i?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.stroke();}
-  for(let i=0;i<16;i++){const f=i/16,a=f*Math.PI*8+t*.6,y=cy-R*.85+f*R*1.7,x1=cx+Math.cos(a)*R*.7,x2=cx+Math.cos(a+Math.PI)*R*.7;ctx.globalAlpha=.25;ctx.beginPath();ctx.moveTo(x1,y);ctx.lineTo(x2,y);ctx.stroke();}
+  // [FAST+] Aurora borealis — layered sine curtains with alpha shimmer
+  for(let layer=0;layer<5;layer++){
+    const yBase=cy-R*.1+layer*H*.1-energy*H*.08;
+    const freq=1.2+layer*.3,amp=H*(.06+energy*.05+layer*.015),spd=.5+layer*.2;
+    ctx.globalAlpha=(0.25+energy*.2)*(1-layer*.15);ctx.beginPath();
+    for(let x=0;x<=W;x+=5){
+      const y=yBase+Math.sin(x/W*Math.PI*2*freq+t*spd)*amp+Math.sin(x/W*Math.PI*3.7+t*(spd*.7))*amp*.4;
+      x?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    }ctx.stroke();
+  }
+  // vertical shafts of light
+  for(let sh=0;sh<6;sh++){
+    const sx=cx+(sh-2.5)*W*.15+Math.sin(t*.3+sh)*W*.04;
+    ctx.globalAlpha=(.15+energy*.2)*(.6+Math.sin(t*.8+sh)*.4);ctx.beginPath();
+    ctx.moveTo(sx,cy-R*(1.2+energy*.3));ctx.lineTo(sx+R*.06,cy+R*.5);ctx.stroke();
+  }
 
-  // [FAST+] Ocean waves — reduce x-step count for slower scanners
+  // [FAST+] Ocean waves with whitecaps — reduce step count on slower scanners
   for(let w=0;w<4;w++){ctx.globalAlpha=(0.35+energy*.3)*(1-w*.18);ctx.beginPath();for(let x=0;x<=W;x+=8){const y=cy+(w-1.5)*H*.14+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))*H*(0.06+energy*.07);x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}
+  // whitecap dots on wave peaks
+  for(let w=0;w<3;w++){for(let x=0;x<=W;x+=W*.12){const wcy=cy+(w-1)*H*.14+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))*H*(0.06+energy*.07);if(Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))>.6){ctx.globalAlpha=.6+energy*.3;ctx.beginPath();ctx.arc(x,wcy,R*.015,0,Math.PI*2);ctx.stroke();}}}
 
-  CREATE YOUR OWN — these are starting points, not a menu.
-  Think about what the music and lyrics demand: a running horse, rising phoenix,
-  solar system, neon cityscape, falling petals, lightning storm, aurora borealis.
-  Make every scene feel like a completely different visual universe.
+  THESE ARE JUST STARTING POINTS. Invent something original for every scene.
+  Running horse. Phoenix. DNA strand. Neon cityscape. Waterfall. Fire tornado.
+  Two dancers mirroring. A solar system. Thunder and lightning. A blooming flower.
+  Make every single scene feel like a completely different visual universe — nothing repeated.
   ─────────────────────────────────────────────────────
 
   ★ HARDWARE CONSTRAINTS — YOUR CODE MUST RESPECT THESE OR THE SHOW BREAKS ★
@@ -287,7 +360,7 @@ LYRIC-SYNC INSTRUCTIONS:
 1. Parse each timestamp (M:SS format) and convert to bar number: bar = floor(timeSeconds / ${secPerBar.toFixed(2)})
 2. Calculate durationBars as the gap between this timestamp and the next one (or end of song)
 3. Write an animationCode that LITERALLY ILLUSTRATES the lyric/moment:
-   - "hands up" / "raise your hands" → write crowd stick-figures with arms raised, bobbing to beat
+   - "hands up" / "raise your hands" → draw 10–12 detailed crowd silhouettes (head, shoulders, torso, legs spread, arms fully extended overhead) bobbing to beat — scale crowd count and arm height with energy
    - "butterfly" / "wings" / flying animals → write a butterfly or bird flock with flapping bezier wings
    - "love" / "heart" → draw a parametric heart pulsing with energy
    - "rain" / "tears" / falling → write vertical streaks falling top-to-bottom
@@ -353,9 +426,17 @@ ANIMATION MANDATE: Every scene must have animationCode. An empty or null animati
 
 SPEED RULE: movementSpeed 0.4–0.7 for text scenes. 0.6–1.0 for pure animation scenes. Hard cap: 1.2.
 
-QUANTITY: 6–12 scenes depending on song length. More scenes = more variety = better show.
+FULL SONG COVERAGE — MANDATORY, NO EXCEPTIONS:
+  The song is ${musicContext ? `${(musicContext.duration / secPerBar).toFixed(0)} bars long (${Math.floor(musicContext.duration / 60)}:${String(Math.floor(musicContext.duration % 60)).padStart(2, "0")} at ${musicContext.bpm.toFixed(0)} BPM)` : "an unknown length"}.
+  Your durationBars values MUST sum to exactly the total bar count (within ±2 bars).
+  There is NO maximum scene count — create as many scenes as it takes to cover the full song.
+  • Short song (< 2 min): 8–12 scenes
+  • Medium song (2–4 min): 14–20 scenes
+  • Long song (4+ min): 20–30 scenes
+  • NEVER let scenes run out before the song ends — the show dies if you stop early.
+  • Alternate peak scenes (4–8 bars, high energy) with transitional scenes (3–6 bars, evolving)
 
-COUNT & UNIQUENESS CHECK: Before outputting, verify: (1) no label field anywhere, (2) no two scenes draw visually similar animations, (3) durationBars is correct for the requested timing.
+COUNT & UNIQUENESS CHECK: Before outputting, verify: (1) no label field anywhere, (2) no two scenes draw visually similar animations — completely different subjects, (3) durationBars values sum to total song bars, (4) every single scene has unique animationCode drawing a different subject.
 
 HARD OUTPUT RULES:
 1. <settings> block at the very end after all prose.
@@ -414,8 +495,8 @@ fadeSeconds: number (default 3)`;
 
   try {
     const stream = await openai.chat.completions.create({
-      model: "gpt-4o",
-      max_tokens: 5000,
+      model: "gpt-5",
+      max_tokens: 16000,
       messages: chatMessages,
       stream: true,
     });

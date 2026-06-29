@@ -1,0 +1,3 @@
+- [GitHub release workflow](github-release-workflow.md) — git commit blocked; use GitHub REST API + `github_token` env var for tags; `git push github HEAD:main` works for pushing commits
+- [DMX Arc sharing pattern](dmx-arc-sharing.md) — AppState shared atomics must be Arc<AtomicBool/U64> so background threads and Tauri commands share the same underlying value
+- [AI show agent token limit](ai-show-token-limit.md) — gpt-5/16000 tokens needed for full-song coverage; 5000 tokens only fits ~8 scenes (~1 min of show)
