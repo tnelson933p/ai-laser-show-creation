@@ -11,7 +11,7 @@ import {
 import { ShowEngine, LISSAJOUS_PRESETS, type VisualState, type ShowOverrides } from "@/lib/show-engine";
 import {
   Play, Square, Upload, Usb, Activity, Zap, Music, ChevronDown, ChevronUp, Cpu,
-  TrendingDown, Scissors, TrendingUp,
+  TrendingDown, Scissors, TrendingUp, Pause, Copy, Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -60,6 +60,11 @@ export default function Dashboard() {
   // Music transitions
   const [isFadingOut, setIsFadingOut] = useState(false);
   const fadeTimerRef = useRef<number | null>(null);
+
+  // Pause / seek
+  const [isPaused, setIsPaused] = useState(false);
+  const pausedAtRef = useRef<number>(0);
+  const [copiedTs, setCopiedTs] = useState(false);
 
   // Audio refs
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -147,7 +152,12 @@ export default function Dashboard() {
     sourceNodeRef.current?.stop();
     sourceNodeRef.current?.disconnect();
     if (timerRef.current) clearInterval(timerRef.current);
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
     setIsPlaying(false);
+    setIsPaused(false);
+    setIsFadingOut(false);
+    pausedAtRef.current = 0;
+    setCurrentFrame(0);
     setCurrentEnvelopes({ bass: 0, mid: 0, high: 0 });
     setDmxOutput(new Array(selectedLaserChannels => selectedLaserChannels).fill(0));
     engineRef.current?.reset();
@@ -266,6 +276,69 @@ export default function Dashboard() {
       } catch { /* port error, ignore */ }
     }
   }, [track]);
+
+  // ── Pause / Resume / Seek (must be after dmxLoop) ──────────────────────────
+  const pausePlayback = useCallback(() => {
+    if (!isPlaying || !audioCtxRef.current) return;
+    const elapsed = audioCtxRef.current.currentTime - startTimeRef.current;
+    pausedAtRef.current = elapsed;
+    sourceNodeRef.current?.stop();
+    sourceNodeRef.current?.disconnect();
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+    setIsPlaying(false);
+    setIsPaused(true);
+    setIsFadingOut(false);
+  }, [isPlaying]);
+
+  const _startSourceAt = useCallback((offset: number) => {
+    if (!track || !audioCtxRef.current) return;
+    const ctx = audioCtxRef.current;
+    const source = ctx.createBufferSource();
+    source.buffer = track.buffer;
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    analyserRef.current = analyser;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(1, ctx.currentTime);
+    gainNodeRef.current = gain;
+    source.connect(analyser);
+    analyser.connect(gain);
+    gain.connect(ctx.destination);
+    const safeOffset = Math.max(0, Math.min(offset, track.analysis.duration - 0.05));
+    source.start(0, safeOffset);
+    sourceNodeRef.current = source;
+    startTimeRef.current = ctx.currentTime - safeOffset;
+    setIsPlaying(true);
+    setIsPaused(false);
+    timerRef.current = window.setInterval(dmxLoop, 25);
+    source.onended = () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+      setIsPlaying(false);
+      setIsPaused(false);
+      visualStateRef.current = null;
+      setDmxOutput(new Array(16).fill(0));
+    };
+  }, [track, dmxLoop]);
+
+  const resumePlayback = useCallback(() => {
+    if (isPlaying || !isPaused) return;
+    _startSourceAt(pausedAtRef.current);
+  }, [isPlaying, isPaused, _startSourceAt]);
+
+  const seekTo = useCallback((seconds: number) => {
+    if (!track) return;
+    const clamped = Math.max(0, Math.min(seconds, track.analysis.duration - 0.05));
+    pausedAtRef.current = clamped;
+    setCurrentFrame(Math.floor(clamped * 40));
+    if (isPlaying) {
+      sourceNodeRef.current?.stop();
+      sourceNodeRef.current?.disconnect();
+      if (timerRef.current) clearInterval(timerRef.current);
+      _startSourceAt(clamped);
+    }
+  }, [track, isPlaying, _startSourceAt]);
 
   const selectedLaserChannels = laser?.channelCount ?? 16;
 
@@ -574,6 +647,108 @@ export default function Dashboard() {
             />
           </CardContent>
         </Card>
+
+        {/* ── Show Timeline / Scrubber ─────────────────────────────────── */}
+        {track && (
+          <div className="border border-zinc-800/60 rounded-lg bg-[#08080f] px-5 py-4 space-y-3">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock className="w-3.5 h-3.5 text-zinc-500" />
+                <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Show Timeline</span>
+              </div>
+              <span className="text-[10px] text-zinc-700">Pause &amp; scrub · copy a timestamp · paste it into the AI chat</span>
+            </div>
+
+            {/* Scrub bar */}
+            <div className="relative">
+              <input
+                type="range"
+                min={0}
+                max={track.analysis.duration}
+                step={0.05}
+                value={currentFrame / 40}
+                onChange={e => seekTo(parseFloat(e.target.value))}
+                className="w-full h-2 cursor-pointer rounded-full appearance-none bg-zinc-900"
+                style={{ accentColor: "#00ff9d" }}
+              />
+              {/* tick marks every 30 s */}
+              <div className="absolute top-4 left-0 right-0 flex justify-between pointer-events-none">
+                {Array.from({ length: Math.floor(track.analysis.duration / 30) + 1 }).map((_, i) => {
+                  const pct = (i * 30 / track.analysis.duration) * 100;
+                  if (pct > 100) return null;
+                  return (
+                    <div key={i} className="absolute flex flex-col items-center" style={{ left: `${pct}%`, transform: "translateX(-50%)" }}>
+                      <div className="w-px h-1.5 bg-zinc-700" />
+                      <span className="text-[9px] text-zinc-600 mt-0.5 font-mono">{formatDuration(i * 30)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Controls row */}
+            <div className="flex items-center gap-3 mt-5">
+              {/* Pause / Resume */}
+              {isPlaying ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={pausePlayback}
+                  className="h-9 px-4 border-zinc-700 text-zinc-300 hover:text-white hover:border-zinc-500 rounded-sm font-mono text-xs uppercase tracking-wider"
+                >
+                  <Pause className="w-3.5 h-3.5 mr-1.5 fill-current" /> Pause
+                </Button>
+              ) : isPaused ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={resumePlayback}
+                  className="h-9 px-4 border-[#00ff9d]/40 text-[#00ff9d] hover:bg-[#00ff9d]/10 rounded-sm font-mono text-xs uppercase tracking-wider"
+                >
+                  <Play className="w-3.5 h-3.5 mr-1.5 fill-current" /> Resume
+                </Button>
+              ) : null}
+
+              {/* Big timestamp */}
+              <div className="flex items-baseline gap-1.5 flex-1">
+                <span className="font-mono text-3xl font-bold text-[#00ff9d] tabular-nums tracking-tight leading-none">
+                  {formatTimestamp(currentFrame / 40)}
+                </span>
+                <span className="font-mono text-sm text-zinc-600 tabular-nums">
+                  / {formatTimestamp(track.analysis.duration)}
+                </span>
+              </div>
+
+              {/* Copy timestamp button */}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const ts = formatTimestamp(currentFrame / 40);
+                  navigator.clipboard.writeText(`at ${ts}`).catch(() => {});
+                  setCopiedTs(true);
+                  setTimeout(() => setCopiedTs(false), 1800);
+                }}
+                className={cn(
+                  "h-9 px-3 rounded-sm font-mono text-xs uppercase tracking-wider transition-colors",
+                  copiedTs
+                    ? "border-[#00ff9d]/50 text-[#00ff9d] bg-[#00ff9d]/10"
+                    : "border-zinc-800 text-zinc-500 hover:text-white hover:border-zinc-600"
+                )}
+                title='Copy "at MM:SS.cc" to clipboard — paste into AI chat'
+              >
+                <Copy className="w-3 h-3 mr-1.5" />
+                {copiedTs ? "Copied!" : "Copy timestamp"}
+              </Button>
+
+              {/* BPM badge */}
+              <Badge className="bg-zinc-900 border border-zinc-700 text-zinc-400 rounded-sm font-mono text-[10px]">
+                {track.analysis.bpm} BPM
+              </Badge>
+            </div>
+          </div>
+        )}
 
         {/* ── DMX Channel Grid (collapsible) ──────────────────────────── */}
         <div className="border border-zinc-800/60 rounded-lg bg-[#08080f] overflow-hidden">
@@ -1091,6 +1266,14 @@ function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** MM:SS.cc — centisecond precision for AI timestamp references */
+function formatTimestamp(seconds: number): string {
+  const m  = Math.floor(seconds / 60);
+  const s  = Math.floor(seconds % 60);
+  const cs = Math.floor((seconds % 1) * 100);
+  return `${m}:${s.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
 }
 
 function colorNameToHex(name: string): string {
