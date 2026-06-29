@@ -165,28 +165,69 @@ animationCode: string (REQUIRED — write JavaScript that draws the animation)
     • Use ctx.globalAlpha for brightness variation between sub-elements
     • Keep code compact — 8 to 25 lines. No async, no DOM, no external refs.
 
-  EXAMPLE PATTERNS (study these, then invent your own visuals):
+  EXAMPLE PATTERNS — each labeled with minimum scanner requirement:
 
-  // DNA double helix
+  // [ALL SCANNERS] Bold starburst — 5 spokes rotating, energy scales radius
+  const spokes=5+Math.round(energy*3);for(let i=0;i<spokes;i++){const a=i/spokes*Math.PI*2+t*.5,r=R*(.5+energy*.3);ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r);ctx.stroke();}ctx.beginPath();ctx.arc(cx,cy,R*.15*(1+energy*.4),0,Math.PI*2);ctx.stroke();
+
+  // [ALL SCANNERS] 3 stick figures with arms raised — simple crowd
+  for(let i=0;i<3;i++){const fx=cx+(i-1)*W*.22,fh=R*.6,fy=cy+R*.2;ctx.beginPath();ctx.arc(fx,fy-fh*.9,fh*.1,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(fx,fy-fh*.75);ctx.lineTo(fx,fy-fh*.35);ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx-fh*.4,fy-fh*(Math.sin(t*2+i)*.05+.85+energy*.1));ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx+fh*.4,fy-fh*(Math.sin(t*2+i+1)*.05+.85+energy*.1));ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx-fh*.18,fy);ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx+fh*.18,fy);ctx.stroke();}
+
+  // [MID+] Rotating wireframe cube
+  const s=R*.5,ca=Math.cos(t*.5),sa=Math.sin(t*.5),cb=Math.cos(t*.3),sb=Math.sin(t*.3);const p=(x,y,z)=>{const rx=x*ca-z*sa,rz=x*sa+z*ca,ry=y*cb-rz*sb;return[cx+rx*1.8,cy+ry*1.8];};const v=[[-1,-1,-1],[-1,-1,1],[-1,1,-1],[-1,1,1],[1,-1,-1],[1,-1,1],[1,1,-1],[1,1,1]].map(([x,y,z])=>p(x*s,y*s,z*s));[[0,1],[0,2],[1,3],[2,3],[4,5],[4,6],[5,7],[6,7],[0,4],[1,5],[2,6],[3,7]].forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(v[a][0],v[a][1]);ctx.lineTo(v[b][0],v[b][1]);ctx.stroke();});
+
+  // [MID+] Pulsing mandala — petals count scaled to scanner budget
+  const petals=4+Math.round(energy*3);for(let i=0;i<petals;i++){const a=i/petals*Math.PI*2+t*.4;ctx.save();ctx.translate(cx,cy);ctx.rotate(a);ctx.beginPath();ctx.ellipse(0,-R*.5,R*.12*(1+energy*.5),R*.3,0,0,Math.PI*2);ctx.stroke();ctx.restore();}ctx.beginPath();ctx.arc(cx,cy,R*.2*(1+energy*.4),0,Math.PI*2);ctx.stroke();
+
+  // [FAST+] DNA double helix (120 points × 2 strands — needs fast/pro scanner)
   for(let s=0;s<2;s++){ctx.beginPath();for(let i=0;i<=120;i++){const f=i/120,a=f*Math.PI*8+t*.6+s*Math.PI,px=cx+Math.cos(a)*R*.7,py=cy-R*.85+f*R*1.7;i?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.stroke();}
   for(let i=0;i<16;i++){const f=i/16,a=f*Math.PI*8+t*.6,y=cy-R*.85+f*R*1.7,x1=cx+Math.cos(a)*R*.7,x2=cx+Math.cos(a+Math.PI)*R*.7;ctx.globalAlpha=.25;ctx.beginPath();ctx.moveTo(x1,y);ctx.lineTo(x2,y);ctx.stroke();}
 
-  // Pulsing mandala (great for drops and emotional peaks)
-  const petals=6+Math.round(energy*4);for(let i=0;i<petals;i++){const a=i/petals*Math.PI*2+t*.4;ctx.save();ctx.translate(cx,cy);ctx.rotate(a);ctx.beginPath();ctx.ellipse(0,-R*.5,R*.12*(1+energy*.5),R*.3,0,0,Math.PI*2);ctx.stroke();ctx.restore();}ctx.beginPath();ctx.arc(cx,cy,R*.2*(1+energy*.4),0,Math.PI*2);ctx.stroke();
-
-  // Rotating wireframe cube (cool for mechanical/industrial moments)
-  const s=R*.5,ca=Math.cos(t*.5),sa=Math.sin(t*.5),cb=Math.cos(t*.3),sb=Math.sin(t*.3);const p=(x,y,z)=>{const rx=x*ca-z*sa,rz=x*sa+z*ca,ry=y*cb-rz*sb;return[cx+rx*1.8,cy+ry*1.8];};const v=[[-1,-1,-1],[-1,-1,1],[-1,1,-1],[-1,1,1],[1,-1,-1],[1,-1,1],[1,1,-1],[1,1,1]].map(([x,y,z])=>p(x*s,y*s,z*s));[[0,1],[0,2],[1,3],[2,3],[4,5],[4,6],[5,7],[6,7],[0,4],[1,5],[2,6],[3,7]].forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(v[a][0],v[a][1]);ctx.lineTo(v[b][0],v[b][1]);ctx.stroke();});
-
-  // Crowd of raised hands / stick figures
-  for(let i=0;i<7;i++){const fx=cx+(i-3)*W*.12,bob=Math.sin(t*2+i)*R*.04*(1+energy);const fy=cy+R*.35+bob,fh=R*.55;ctx.beginPath();ctx.arc(fx,fy-fh*.9,fh*.1,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(fx,fy-fh*.75);ctx.lineTo(fx,fy-fh*.35);ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx-fh*(Math.sin(t*2+i)*.1+.35),fy-fh*(Math.sin(t*1.8+i)*.06+.88+energy*.12));ctx.moveTo(fx,fy-fh*.62);ctx.lineTo(fx+fh*(Math.sin(t*2+i+1)*.1+.35),fy-fh*(Math.sin(t*1.8+i+1)*.06+.88+energy*.12));ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx-fh*.16,fy);ctx.moveTo(fx,fy-fh*.35);ctx.lineTo(fx+fh*.16,fy);ctx.stroke();}
-
-  // Ocean waves (layered sinusoids)
-  for(let w=0;w<5;w++){ctx.globalAlpha=(0.35+energy*.3)*(1-w*.15);ctx.beginPath();for(let x=0;x<=W;x+=3){const y=cy+(w-2)*H*.13+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))*H*(0.06+energy*.07);x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}
+  // [FAST+] Ocean waves — reduce x-step count for slower scanners
+  for(let w=0;w<4;w++){ctx.globalAlpha=(0.35+energy*.3)*(1-w*.18);ctx.beginPath();for(let x=0;x<=W;x+=8){const y=cy+(w-1.5)*H*.14+Math.sin(x/W*Math.PI*2*(1.5+w*.4)+t*(1+w*.3))*H*(0.06+energy*.07);x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}
 
   CREATE YOUR OWN — these are starting points, not a menu.
   Think about what the music and lyrics demand: a running horse, rising phoenix,
   solar system, neon cityscape, falling petals, lightning storm, aurora borealis.
   Make every scene feel like a completely different visual universe.
+  ─────────────────────────────────────────────────────
+
+  ★ HARDWARE CONSTRAINTS — YOUR CODE MUST RESPECT THESE OR THE SHOW BREAKS ★
+  ─────────────────────────────────────────────────────
+  This laser is: ${laser.brand} ${laser.model} | Scanner: ${laser.scanTier} | Colors: ${(laser.availableColors ?? []).join(", ")} | Color mode: ${laser.colorMode}${laser.maxPowerMw ? ` | Power: ${laser.maxPowerMw}mW` : ""}
+
+${laser.scanTier === "budget" ? `  SCANNER: BUDGET (8–12 KPPS) — STRICT PATH LIMITS
+  Real laser scanners draw points sequentially. Too many points per frame = visible flicker.
+  • Max ~60 points per ctx.beginPath()…stroke() call (each loop iteration = 1 point)
+  • Max 3 separate stroke calls per scene total
+  • Forbidden: dense spirals, fine particle systems, high-res bezier curves, large loop counts
+  • GOOD: simple geometric shapes (triangles, pentagons, stars with 5-7 points), straight lines,
+    wide sweeping arcs, 3-5 figure silhouettes, single bold wave (max 40 x-steps)
+  • EXAMPLE safe loop: for(let i=0;i<5;i++){...} NOT for(let i=0;i<200;i++){...}` : laser.scanTier === "mid" ? `  SCANNER: MID-TIER (12–18 KPPS) — MODERATE PATH LIMITS
+  • Max ~120 points per ctx.beginPath()…stroke() call
+  • Max 6 separate stroke calls per scene total
+  • OK: moderate spirals (max 3 turns, 80 steps), 6-8 figure crowds, layered waves (3 layers, 40 x-steps each)
+  • Avoid: particle systems with 50+ dots, ultra-dense Lissajous, sub-pixel detail
+  • GOOD patterns: bezier curves (3-4 control points), simple 3D wireframes (cube/pyramid), 5-7 petals` : laser.scanTier === "fast" ? `  SCANNER: FAST (18–25 KPPS) — MODERATE-HIGH PATH LIMITS
+  • Max ~200 points per ctx.beginPath()…stroke() call
+  • Max 10 separate stroke calls per scene total
+  • OK: complex spirals (5 turns, 150 steps), 3D wireframes, 10-figure crowds, 5-layer waves
+  • Fine details visible: can use tighter bezier curves, moderate particle counts (20-30)` : `  SCANNER: PRO (25–40 KPPS) — FULL CREATIVE FREEDOM
+  • Max ~400 points per ctx.beginPath()…stroke() call
+  • Up to 15+ separate stroke calls per scene
+  • Complex spirals, dense particle systems, fine 3D geometry — all safe
+  • This laser can render anything you can imagine at full frame rate`}
+
+${(laser.colorMode === "rgb" || laser.colorMode === "rgb-full") ? `  COLOR: RGB FULL — You have red, green, and blue. The 'color' variable carries the current laser color.
+  • Single-color animation: stroke everything in 'color' (already default — laser reacts to music)
+  • Grating fan: at choruses, pairing with gratingEnabled:true fans the colored beam across the room
+  • Design for one vivid laser color at a time — the engine picks the color, you pick the shapes` : laser.colorMode === "indexed" ? `  COLOR: INDEXED PALETTE — Fixed color slots (${(laser.availableColors ?? []).join(", ")})
+  • The 'color' variable reflects the active indexed color — design shapes that work in any single color
+  • Rely on shape variety and movement for visual interest, not color mixing
+  • Bold simple outlines read better than fine detail with this color system` : `  COLOR: SINGLE COLOR (${(laser.availableColors ?? []).join(", ")}) — Monochrome laser
+  • All beams are the same color. Use ctx.globalAlpha variations (0.2 to 1.0) for depth.
+  • Design for high contrast: thick bold strokes for important elements, thin for secondary
+  • No color variety — compensate with shape drama, scale contrast, and alpha layering`}
   ─────────────────────────────────────────────────────
 
 movementStyle: "lissajous" | "sweep" | "bounce" | "step"
