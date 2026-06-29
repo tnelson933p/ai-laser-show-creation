@@ -1,0 +1,55 @@
+You are an expert full-stack Python engineer and hardware integration specialist. Build a desktop application called "AI LaserShow Generator" that automatically translates music files into real-time synchronized DMX512 light shows for moving animation lasers via a local USB-to-DMX cable interface.
+
+### PHASE 1: BRAND DISCOVERY & HARDWARE INTERFACES
+1. INITIAL STARTUP CONFIGURATION:
+   - When launched, the application UI must require the user to configure their hardware before loading any music.
+   - Dropdown menu 1: "Laser Brand/Model". Pre-populate this list with:
+     * "Eytse EY003-L (16-Channel Mode)" [Default Choice]
+     * "Generic Budget Animation Laser (7-Channel Mode)"
+     * "Custom / Unlisted Laser (Manual Mapping)"
+   - Dropdown menu 2: "Serial COM Port Selector". Dynamically scan the local system's serial ports and list them (e.g., COM1, COM3, /dev/cu.usbserial).
+   - If "Custom" is chosen, reveal an expandable settings grid allowing the user to assign DMX channels 1 through 16 to specific functions (Mode, Pattern, X-Pos, Y-Pos, Zoom, Strobe, Red, Green, Blue, Effects).
+
+2. HARDWARE CHIPSET INTEGRATION:
+   - Utilize the 'pyserial' library to establish a 250,000 baud serial connection with standard FTDI or CH340 based USB-to-DMX hardware adapters.
+   - Format packets using the strict DMX512 serial protocol framing structure: a long BREAK signal, a Mark-After-Break (MAB) pulse, a Start Byte (0x00), followed by an array of up to 512 channel data bytes.
+
+### PHASE 2: AUDIO INTERFACE & REAL-TIME ANALYSIS ENGINE
+1. INTERACTIVE FILE MANAGEMENT:
+   - Construct a modern desktop graphical user interface using Tkinter, CustomTkinter, or Pygame.
+   - Provide a clean drag-and-drop or file-dialog upload module supporting .mp3, .wav, and .ogg file extensions.
+
+2. ALGORITHMIC MUSIC TRANSLATION:
+   - Integrate the 'librosa' library alongside 'numpy' to run offline track parsing immediately after a file is uploaded.
+   - Extract the global track Tempo (BPM) and generate an absolute timeline array of beat onset timestamps.
+   - Apply a Fast Fourier Transform (FFT) array filter to split audio frequencies into three distinct runtime tracking envelopes:
+     * Bass Envelope (20Hz - 150Hz): Tracks kick drums, sub-bass drops, and low rhythmic thumps.
+     * Mid-Range Envelope (150Hz - 4000Hz): Tracks vocals, leads, and synth melodies.
+     * High-End Envelope (4000Hz - 20kHz): Tracks cymbals, hi-hats, snares, and white-noise sweeps.
+
+### PHASE 3: THE AI FIXTURE AND AUTOMATION MATRIX
+1. REAL-TIME PLAYBACK ENGINE:
+   - Synchronize file playback through local laptop speakers using the 'sounddevice' or 'pygame.mixer' audio library.
+   - Run a deterministic multimedia execution loop updated strictly at 40Hz (40 frames per second / 25ms loop interval) to ensure fluid laser scan rates.
+
+2. FIREFALL FIXTURE AUTOMATION MATRICES:
+   Depending on the Brand Profile selected in Phase 1, translate the audio frequency metrics into active DMX data arrays:
+
+   * IF "Eytse EY003-L" PROFILE IS SELECTED:
+     - Channel 1 (Control Mode): Lock continuously to a value of 120 (DMX Remote Manual Control Override).
+     - Channel 2 (Animation Bank) & Channels 3-4 (Pattern Selection): Shift values when the Mid-Range or High-End envelopes calculate sudden energy changes or track structural transitions (e.g., verse to chorus).
+     - Channels 5-6 (X/Y Position) & Channels 7-8 (Rotation): Smoothly modulate coordinate paths (sine/cosine loops) scaling the speed directly with the calculated BPM.
+     - Channels 9-10 (Zoom & Size Scale): Set baseline to 100. Snaps instantly to 255 (Max Width) during intense Bass Envelope spikes, then decays smoothly back to baseline.
+     - Channel 11 (Strobe Rate): Tie value directly to High-End transient peaks (snares/claps) for automated flash synchronization.
+     - Channels 12, 13, 14 (RGB Mixing): Drive Channel 12 (Red) with Bass intensity, Channel 13 (Green) with Mid-Range melody presence, and Channel 14 (Blue) with High-End presence.
+
+   * IF "GENERIC 7-CHANNEL" PROFILE IS SELECTED:
+     - Apply identical math constraints, compressing the structural tracking to fit the narrower 7-channel schema (Ch1: Mode, Ch2: Pattern, Ch3: Strobe, Ch4: Zoom, Ch5-6: X/Y, Ch7: Color Palette index).
+
+### PHASE 4: PACKAGING & LOCAL DEVELOPMENT INSTRUCTIONS
+1. SYSTEM ARCHITECTURE METADATA:
+   - Provide a zero-preamble configuration structure. Do not output internal system tags or markdown remnants.
+   - Structure the output files cleanly into logical files: `main.py` (App Core and UI layer), `analyzer.py` (Librosa audio parsing pipeline), and `dmx_controller.py` (Serial data stream interface).
+2. LOGISTICAL USER PROMPT:
+   - Include a concise 'requirements.txt' block file containing exact versions for: `pyserial`, `librosa`, `sounddevice`, `numpy`, and `soundfile`.
+   - Write short inline terminal launch command scripts so the end user can cleanly copy the workspace code onto their desktop and execute it instantly over local USB hardware interfaces.
