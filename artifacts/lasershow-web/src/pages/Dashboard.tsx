@@ -1107,7 +1107,7 @@ export default function Dashboard() {
                   )}
                 >
                   {i === activeSceneIdx && <span className="w-1.5 h-1.5 rounded-full bg-[#00ff9d] animate-pulse" />}
-                  <span>{scene.label ?? `Scene ${i + 1}`}</span>
+                  <span>Scene {i + 1}</span>
                   <span className="text-zinc-700">{scene.durationBars}b</span>
                 </div>
               ))}
@@ -1876,29 +1876,7 @@ function LaserCanvas({ visualStateRef, isPlaying, laser, analyser, activeSceneDi
         }
       }
 
-      // ── Scene flash: name shown briefly when scene changes ───────────
-      const sceneDisplay = activeSceneDisplayRef.current;
-      if (sceneDisplay && isPlaying) {
-        const age = performance.now() - sceneDisplay.changedAt;
-        const SHOW_MS = 2200;
-        if (age < SHOW_MS) {
-          const dpr = window.devicePixelRatio;
-          const fadeIn  = Math.min(1, age / 200);
-          const fadeOut = age > SHOW_MS - 400 ? (SHOW_MS - age) / 400 : 1;
-          const alpha   = fadeIn * fadeOut * 0.95;
-          const fontSize = Math.min(W, H) * 0.10;
-          ctx.save();
-          ctx.font = `900 ${fontSize}px "Arial Black", Impact, sans-serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.shadowBlur = 30 * dpr;
-          ctx.shadowColor = "#00ff9d";
-          ctx.fillStyle = "#00ff9d";
-          ctx.globalAlpha = alpha;
-          ctx.fillText(sceneDisplay.label.toUpperCase(), cx, H * 0.12);
-          ctx.restore();
-        }
-      }
+      // Scene label flash removed — labels don't display on canvas
 
       // State label — bottom-right corner
       {
