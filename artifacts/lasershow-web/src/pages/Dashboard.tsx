@@ -463,6 +463,9 @@ export default function Dashboard() {
                     laser={laser}
                     overrides={showOverrides}
                     onOverridesChange={setShowOverrides}
+                    track={track}
+                    currentEnvelopes={currentEnvelopes}
+                    isPlaying={isPlaying}
                   />
 
                   {/* DMX connect */}
@@ -838,10 +841,16 @@ function ShowChat({
   laser,
   overrides,
   onOverridesChange,
+  track,
+  currentEnvelopes,
+  isPlaying,
 }: {
   laser: LaserModel;
   overrides: ShowOverrides;
   onOverridesChange: (o: ShowOverrides) => void;
+  track: TrackData | null;
+  currentEnvelopes: { bass: number; mid: number; high: number };
+  isPlaying: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -875,6 +884,20 @@ function ShowChat({
     let accumulated = "";
 
     try {
+      // Build music context from analysis data so AI can make music-aware decisions
+      const musicContext = track ? (() => {
+        const avg = (a: ArrayLike<number>) => a.length ? Array.from(a).reduce((s, v) => s + v, 0) / a.length : 0;
+        return {
+          filename: track.filename,
+          bpm: track.analysis.bpm,
+          duration: track.analysis.duration,
+          isPlaying,
+          avgBass: avg(track.analysis.bass),
+          avgMid:  avg(track.analysis.mid),
+          avgHigh: avg(track.analysis.high),
+        };
+      })() : undefined;
+
       const resp = await fetch("/api/laser/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -890,6 +913,7 @@ function ShowChat({
           },
           messages: updatedMsgs.map(m => ({ role: m.role, content: m.content })),
           currentSettings: overrides,
+          musicContext,
         }),
       });
 
@@ -909,12 +933,19 @@ function ShowChat({
           if (!line.startsWith("data: ")) continue;
           try {
             const data = JSON.parse(line.slice(6)) as { content?: string; done?: boolean; error?: string };
-            if (data.content) {
+            if (data.error) {
+              accumulated = `[AI unavailable: ${data.error}]`;
+              setMessages(prev => {
+                const next = [...prev];
+                next[placeholderIdx] = { role: "assistant", content: accumulated, displayContent: accumulated };
+                return next;
+              });
+            } else if (data.content) {
               accumulated += data.content;
               const { display } = parseSettingsBlock(accumulated);
               setMessages(prev => {
                 const next = [...prev];
-                next[placeholderIdx] = { role: "assistant", content: accumulated, displayContent: display };
+                next[placeholderIdx] = { role: "assistant", content: accumulated, displayContent: display || accumulated };
                 return next;
               });
               scrollToBottom();
@@ -925,19 +956,34 @@ function ShowChat({
 
       // Final pass — parse and apply settings
       const { display, settings } = parseSettingsBlock(accumulated);
-      if (settings) {
+      const finalDisplay = display || accumulated;
+
+      // If stream closed with no content at all, show a fallback so "thinking…" never sticks
+      if (!accumulated) {
+        setMessages(prev => {
+          const next = [...prev];
+          next[placeholderIdx] = { role: "assistant", content: "No response.", displayContent: "AI returned no response. Please try again." };
+          return next;
+        });
+      } else if (settings) {
         const merged = { ...overrides, ...settings };
         onOverridesChange(merged);
         setMessages(prev => {
           const next = [...prev];
-          next[placeholderIdx] = { role: "assistant", content: accumulated, displayContent: display, settingsApplied: settings };
+          next[placeholderIdx] = { role: "assistant", content: accumulated, displayContent: finalDisplay, settingsApplied: settings };
+          return next;
+        });
+      } else {
+        setMessages(prev => {
+          const next = [...prev];
+          next[placeholderIdx] = { role: "assistant", content: accumulated, displayContent: finalDisplay };
           return next;
         });
       }
     } catch {
       setMessages(prev => {
         const next = [...prev];
-        next[placeholderIdx] = { role: "assistant", content: "Connection error.", displayContent: "Connection error." };
+        next[placeholderIdx] = { role: "assistant", content: "Connection error.", displayContent: "Connection error — check the API server." };
         return next;
       });
     } finally {

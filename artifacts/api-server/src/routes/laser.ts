@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+type ChatCompletionMessageParam = { role: "system" | "user" | "assistant"; content: string };
 
 const router = Router();
 
@@ -93,7 +93,7 @@ Keep the response focused, expert-level, and under 300 words. Use specific numbe
 // Streams SSE. AI may embed <settings>{...}</settings> to update show params.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/laser/chat", async (req, res) => {
-  const { laser, messages, currentSettings } = req.body as {
+  const { laser, messages, currentSettings, musicContext } = req.body as {
     laser: {
       brand: string; model: string; channelCount: number;
       colorMode: string; scanTier: string;
@@ -101,6 +101,15 @@ router.post("/laser/chat", async (req, res) => {
     };
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     currentSettings: Record<string, unknown>;
+    musicContext?: {
+      filename: string;
+      bpm: number;
+      duration: number;
+      isPlaying: boolean;
+      avgBass: number;
+      avgMid: number;
+      avgHigh: number;
+    };
   };
 
   if (!laser || !messages?.length) {
@@ -126,12 +135,25 @@ ADJUSTABLE SHOW PARAMETERS (you can change these by emitting a <settings> block)
 
 Current show settings: ${JSON.stringify(currentSettings, null, 2)}`;
 
+  const musicSection = musicContext
+    ? `
+CURRENT TRACK (loaded in the show):
+- File: ${musicContext.filename}
+- BPM: ${musicContext.bpm}
+- Duration: ${Math.floor(musicContext.duration / 60)}:${String(Math.floor(musicContext.duration % 60)).padStart(2, "0")}
+- Status: ${musicContext.isPlaying ? "PLAYING NOW" : "paused / stopped"}
+- Energy signature — Bass avg: ${(musicContext.avgBass * 100).toFixed(0)}%, Mid avg: ${(musicContext.avgMid * 100).toFixed(0)}%, High avg: ${(musicContext.avgHigh * 100).toFixed(0)}%
+
+Use the BPM to set patternShiftBeats (e.g. 8 or 16 beats per pattern change), and use the energy signature to decide how aggressive the bass threshold and zoom settings should be. A high bass percentage means the track is bass-heavy — lower the bassThreshold and enable zoom snaps. High treble means enable grating and faster movement.`
+    : "\nNo track loaded yet — give general advice until the user loads music.";
+
   const systemPrompt = `You are an expert laser show programmer and show director with 20+ years of professional experience. You are working interactively with the user to design and refine a music-synchronized laser show for a specific fixture.
 
 Laser fixture: ${laser.brand} ${laser.model}
 DMX channels: ${laser.channelCount} | Color: ${laser.colorMode} | Scanner: ${laser.scanTier}
 Colors available: ${(laser.availableColors ?? []).join(", ")}
 Features: ${(laser.specialFeatures ?? []).join(", ") || "standard"}
+${musicSection}
 
 ${settingsDoc}
 
@@ -170,8 +192,8 @@ MUSIC TRANSITION NOTES:
 
   try {
     const stream = await openai.chat.completions.create({
-      model: "gpt-5-mini",
-      max_completion_tokens: 400,
+      model: "gpt-4o-mini",
+      max_tokens: 400,
       messages: chatMessages,
       stream: true,
     });
