@@ -60,6 +60,11 @@ const GENERIC7_CHANNEL_NAMES = [
   'Mode','Pattern','Strobe','Zoom','X Position','Y Position','Color Index',
 ];
 
+// ── Zone Map constants ─────────────────────────────────────────────────────────
+const ZONE_COLS = 12;
+const ZONE_ROWS = 8;
+const ZONE_STORAGE_KEY = 'lasershow_zone_presets';
+
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = {
   connected: false,
@@ -81,6 +86,10 @@ const state = {
   energyHistory: [],
   zoomDecay: 0,
   pendingSeek: null,
+  zoneMask: Array.from({ length: ZONE_ROWS }, () => new Array(ZONE_COLS).fill(true)),
+  zoneEnabled: false,
+  zonePreview: false,
+  zonePreviewTimer: null,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -259,6 +268,21 @@ function drawPreview() {
   const [a, b, delta] = LISSAJOUS[pidx];
 
   previewCtx.save();
+
+  // Zone clip — constrain Lissajous to active zone cells
+  if (state.zoneEnabled || state.zonePreview) {
+    const cw2 = W / ZONE_COLS, rh2 = H / ZONE_ROWS;
+    previewCtx.beginPath();
+    for (let r = 0; r < ZONE_ROWS; r++) {
+      for (let c = 0; c < ZONE_COLS; c++) {
+        if (state.zoneMask[r][c]) {
+          previewCtx.rect(c * cw2, r * rh2, cw2, rh2);
+        }
+      }
+    }
+    previewCtx.clip();
+  }
+
   previewCtx.shadowBlur = 12 + energy * 24;
   previewCtx.shadowColor = color;
   previewCtx.strokeStyle = color;
@@ -275,6 +299,9 @@ function drawPreview() {
   }
   previewCtx.stroke();
   previewCtx.restore();
+
+  // Zone overlay — draw grid + blocked cells on top
+  drawZoneOverlay(previewCtx, W, H);
 }
 
 // ── Serial port helpers ───────────────────────────────────────────────────────
@@ -436,6 +463,31 @@ function computeDmx(bass, mid, high, bpm, elapsed) {
     // CH16 unused (15-ch fixture)
     ch[15] = 0;
   }
+  // ── Zone masking: remap X/Y position + scale zoom to active zone bounds ───────
+  if (state.zoneEnabled) {
+    const bounds = getZoneBounds();
+    if (bounds) {
+      const { minX, maxX, minY, maxY } = bounds;
+      const zw = maxX - minX;
+      const zh = maxY - minY;
+      if (laser.channels === 7) {
+        // 7-ch: CH5=X, CH6=Y, CH4=Zoom
+        const ox = ch[4] / 255, oy = ch[5] / 255;
+        ch[4] = Math.round((minX + ox * zw) * 255);
+        ch[5] = Math.round((minY + oy * zh) * 255);
+        ch[3] = Math.round(ch[3] * Math.min(zw, zh));
+      } else {
+        // 15-ch Eytse: CH5=X(idx4), CH6=Y(idx5), CH7=Xzoom(idx6), CH8=Yzoom(idx7), CH14=Size(idx13)
+        const ox = ch[4] / 255, oy = ch[5] / 255;
+        ch[4]  = Math.round((minX + ox * zw) * 255);
+        ch[5]  = Math.round((minY + oy * zh) * 255);
+        ch[6]  = Math.round(ch[6]  * zw);
+        ch[7]  = Math.round(ch[7]  * zh);
+        ch[13] = Math.round(ch[13] * Math.min(zw, zh));
+      }
+    }
+  }
+
   return ch.slice(0, laser.channels);
 }
 
@@ -450,9 +502,9 @@ function updateChannelDisplay(values) {
 
 // ── Envelope bars ─────────────────────────────────────────────────────────────
 function updateEnvelopeBars(bass, mid, high) {
-  barBass.style.width = `${bass * 100}%`;
-  barMid.style.width  = `${mid  * 100}%`;
-  barHigh.style.width = `${high * 100}%`;
+  barBass.style.setProperty('--level', `${bass * 100}%`);
+  barMid.style.setProperty('--level',  `${mid  * 100}%`);
+  barHigh.style.setProperty('--level', `${high * 100}%`);
 }
 
 // ── Progress / time ───────────────────────────────────────────────────────────
@@ -521,6 +573,8 @@ async function startPlayback() {
     btnPlay.classList.add('playing');
     iconPlay.classList.add('hidden');
     iconStop.classList.remove('hidden');
+    const liveBanner = $('laser-live-banner');
+    if (liveBanner) liveBanner.classList.remove('hidden');
     startPoll();
   } catch (e) { alert('Playback failed: ' + e); }
 }
@@ -537,6 +591,8 @@ async function stopPlayback() {
   btnPlay.classList.remove('playing');
   iconPlay.classList.remove('hidden');
   iconStop.classList.add('hidden');
+  const liveBanner = $('laser-live-banner');
+  if (liveBanner) liveBanner.classList.add('hidden');
 }
 
 // ── Cable type toggle ─────────────────────────────────────────────────────────
@@ -847,6 +903,29 @@ async function sendAiMessage() {
           duration: state.duration,
           isPlaying: state.playing,
         } : undefined,
+        zoneInfo: (() => {
+          const total = ZONE_COLS * ZONE_ROWS;
+          const activeCells = state.zoneMask.flat().filter(Boolean).length;
+          if (!state.zoneEnabled || activeCells === total) return null;
+          const bounds = getZoneBounds();
+          // Human-readable description of the active zone
+          const leftPct  = Math.round(bounds.minX * 100);
+          const rightPct = Math.round(bounds.maxX * 100);
+          const topPct   = Math.round(bounds.minY * 100);
+          const botPct   = Math.round(bounds.maxY * 100);
+          const cx = Math.round((bounds.minX + bounds.maxX) / 2 * 100);
+          const cy = Math.round((bounds.minY + bounds.maxY) / 2 * 100);
+          const hPos = cx < 35 ? 'left third' : cx > 65 ? 'right third' : 'center';
+          const vPos = cy < 35 ? 'top third'  : cy > 65 ? 'bottom third' : 'middle';
+          return {
+            enabled: true,
+            activeCells,
+            totalCells: total,
+            activePercent: Math.round(activeCells / total * 100),
+            bounds: { minX: bounds.minX, maxX: bounds.maxX, minY: bounds.minY, maxY: bounds.maxY },
+            description: `${hPos}, ${vPos} — horizontal ${leftPct}%–${rightPct}%, vertical ${topPct}%–${botPct}% of output field`,
+          };
+        })(),
       }),
     });
 
@@ -1212,3 +1291,227 @@ if (aiSaveBtn) {
 }
 
 renderLibrary();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SAFETY ZONE MAPPER
+// ══════════════════════════════════════════════════════════════════════════════
+
+function getZoneBounds() {
+  let minR = ZONE_ROWS, maxR = -1, minC = ZONE_COLS, maxC = -1;
+  for (let r = 0; r < ZONE_ROWS; r++) {
+    for (let c = 0; c < ZONE_COLS; c++) {
+      if (state.zoneMask[r][c]) {
+        if (r < minR) minR = r;
+        if (r > maxR) maxR = r;
+        if (c < minC) minC = c;
+        if (c > maxC) maxC = c;
+      }
+    }
+  }
+  if (maxR < 0) return { minX: 0.45, maxX: 0.55, minY: 0.45, maxY: 0.55 };
+  return {
+    minX: minC / ZONE_COLS,
+    maxX: (maxC + 1) / ZONE_COLS,
+    minY: minR / ZONE_ROWS,
+    maxY: (maxR + 1) / ZONE_ROWS,
+  };
+}
+
+function drawZoneOverlay(ctx, W, H) {
+  if (!state.zoneEnabled && !state.zonePreview) return;
+  const cw = W / ZONE_COLS;
+  const rh = H / ZONE_ROWS;
+
+  // Blocked cells — red tint + X mark
+  for (let r = 0; r < ZONE_ROWS; r++) {
+    for (let c = 0; c < ZONE_COLS; c++) {
+      if (!state.zoneMask[r][c]) {
+        ctx.save();
+        ctx.globalAlpha = 0.42;
+        ctx.fillStyle = '#ff2828';
+        ctx.fillRect(c * cw, r * rh, cw, rh);
+        ctx.globalAlpha = 0.75;
+        ctx.strokeStyle = 'rgba(255,80,80,0.9)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(c * cw + 4, r * rh + 4);
+        ctx.lineTo((c + 1) * cw - 4, (r + 1) * rh - 4);
+        ctx.moveTo((c + 1) * cw - 4, r * rh + 4);
+        ctx.lineTo(c * cw + 4, (r + 1) * rh - 4);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  // Grid lines
+  ctx.save();
+  ctx.strokeStyle = 'rgba(90,90,140,0.35)';
+  ctx.lineWidth = 0.5;
+  for (let c = 1; c < ZONE_COLS; c++) {
+    ctx.beginPath(); ctx.moveTo(c * cw, 0); ctx.lineTo(c * cw, H); ctx.stroke();
+  }
+  for (let r = 1; r < ZONE_ROWS; r++) {
+    ctx.beginPath(); ctx.moveTo(0, r * rh); ctx.lineTo(W, r * rh); ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(108,99,255,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(1, 1, W - 2, H - 2);
+  ctx.restore();
+}
+
+function buildZoneGrid() {
+  const grid = $('zone-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  for (let r = 0; r < ZONE_ROWS; r++) {
+    for (let c = 0; c < ZONE_COLS; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'zone-cell' + (state.zoneMask[r][c] ? '' : ' blocked');
+      cell.title = `Row ${r + 1}, Col ${c + 1}`;
+      cell.addEventListener('click', () => toggleZoneCell(r, c));
+      grid.appendChild(cell);
+    }
+  }
+  updateZoneStats();
+}
+
+function toggleZoneCell(r, c) {
+  state.zoneMask[r][c] = !state.zoneMask[r][c];
+  const cells = document.querySelectorAll('.zone-cell');
+  const idx = r * ZONE_COLS + c;
+  if (cells[idx]) cells[idx].classList.toggle('blocked');
+  updateZoneStats();
+}
+
+function updateZoneStats() {
+  const total = ZONE_COLS * ZONE_ROWS;
+  const active = state.zoneMask.flat().filter(Boolean).length;
+  const el = $('zone-stats');
+  const pctEl = $('zone-pct');
+  if (el) el.textContent = `${active} / ${total} active`;
+  if (pctEl) pctEl.textContent = `${Math.round((active / total) * 100)}% of output field active`;
+}
+
+function saveZonePreset(name) {
+  const presets = JSON.parse(localStorage.getItem(ZONE_STORAGE_KEY) || '[]');
+  presets.push({ name, mask: state.zoneMask.map(r => [...r]), saved: Date.now() });
+  if (presets.length > 8) presets.shift();
+  localStorage.setItem(ZONE_STORAGE_KEY, JSON.stringify(presets));
+  renderZonePresets();
+}
+
+function loadZonePreset(idx) {
+  const presets = JSON.parse(localStorage.getItem(ZONE_STORAGE_KEY) || '[]');
+  if (presets[idx]) {
+    state.zoneMask = presets[idx].mask.map(r => [...r]);
+    buildZoneGrid();
+  }
+}
+
+function deleteZonePreset(idx) {
+  const presets = JSON.parse(localStorage.getItem(ZONE_STORAGE_KEY) || '[]');
+  presets.splice(idx, 1);
+  localStorage.setItem(ZONE_STORAGE_KEY, JSON.stringify(presets));
+  renderZonePresets();
+}
+
+function renderZonePresets() {
+  const presets = JSON.parse(localStorage.getItem(ZONE_STORAGE_KEY) || '[]');
+  const list = $('zone-presets-list');
+  if (!list) return;
+  if (presets.length === 0) {
+    list.innerHTML = '<p class="muted-hint">No saved zones yet.</p>';
+    return;
+  }
+  list.innerHTML = presets.map((p, i) => `
+    <div class="zone-preset-row">
+      <span class="zone-preset-name">${p.name}</span>
+      <div class="zone-preset-actions">
+        <button class="btn-ghost btn-xs zone-preset-load" data-idx="${i}">Load</button>
+        <button class="btn-ghost btn-xs zone-preset-del" data-idx="${i}">✕</button>
+      </div>
+    </div>
+  `).join('');
+  list.querySelectorAll('.zone-preset-load').forEach(btn =>
+    btn.addEventListener('click', () => loadZonePreset(+btn.dataset.idx)));
+  list.querySelectorAll('.zone-preset-del').forEach(btn =>
+    btn.addEventListener('click', () => deleteZonePreset(+btn.dataset.idx)));
+}
+
+// ── Zone event listeners ───────────────────────────────────────────────────────
+const zoneToggle = $('zone-enabled-toggle');
+if (zoneToggle) {
+  zoneToggle.addEventListener('change', () => {
+    state.zoneEnabled = zoneToggle.checked;
+    const label = $('zone-enabled-label');
+    if (label) {
+      label.textContent = state.zoneEnabled ? 'ON' : 'OFF';
+      label.style.color  = state.zoneEnabled ? 'var(--green)' : 'var(--muted)';
+    }
+  });
+}
+
+const zoneBtnSelectAll = $('zone-select-all');
+if (zoneBtnSelectAll) {
+  zoneBtnSelectAll.addEventListener('click', () => {
+    for (let r = 0; r < ZONE_ROWS; r++)
+      for (let c = 0; c < ZONE_COLS; c++)
+        state.zoneMask[r][c] = true;
+    buildZoneGrid();
+  });
+}
+
+const zoneBtnClearAll = $('zone-clear-all');
+if (zoneBtnClearAll) {
+  zoneBtnClearAll.addEventListener('click', () => {
+    for (let r = 0; r < ZONE_ROWS; r++)
+      for (let c = 0; c < ZONE_COLS; c++)
+        state.zoneMask[r][c] = false;
+    buildZoneGrid();
+  });
+}
+
+const zoneBtnInvert = $('zone-invert');
+if (zoneBtnInvert) {
+  zoneBtnInvert.addEventListener('click', () => {
+    for (let r = 0; r < ZONE_ROWS; r++)
+      for (let c = 0; c < ZONE_COLS; c++)
+        state.zoneMask[r][c] = !state.zoneMask[r][c];
+    buildZoneGrid();
+  });
+}
+
+const zoneBtnProject = $('zone-project');
+if (zoneBtnProject) {
+  zoneBtnProject.addEventListener('click', () => {
+    if (state.zonePreview) {
+      state.zonePreview = false;
+      clearTimeout(state.zonePreviewTimer);
+      zoneBtnProject.textContent = '⚡ Preview Field';
+      zoneBtnProject.classList.remove('active');
+      return;
+    }
+    state.zonePreview = true;
+    zoneBtnProject.textContent = '⏹ Stop Preview';
+    zoneBtnProject.classList.add('active');
+    state.zonePreviewTimer = setTimeout(() => {
+      state.zonePreview = false;
+      if (zoneBtnProject) {
+        zoneBtnProject.textContent = '⚡ Preview Field';
+        zoneBtnProject.classList.remove('active');
+      }
+    }, 8000);
+  });
+}
+
+const zoneBtnSavePreset = $('zone-save-preset');
+if (zoneBtnSavePreset) {
+  zoneBtnSavePreset.addEventListener('click', () => {
+    const name = prompt('Name this zone:', 'Zone ' + new Date().toLocaleDateString());
+    if (name !== null) saveZonePreset(name || 'Untitled Zone');
+  });
+}
+
+buildZoneGrid();
+renderZonePresets();
