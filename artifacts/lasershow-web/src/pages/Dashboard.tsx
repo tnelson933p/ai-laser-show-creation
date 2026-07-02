@@ -67,6 +67,10 @@ export default function Dashboard() {
   const [webSerialSupported, setWebSerialSupported] = useState(true);
   const [dmxExpanded, setDmxExpanded] = useState(false);
   const [dmxCableType, setDmxCableType] = useState<"enttec-pro" | "raw">("enttec-pro");
+  const [artnetConnected, setArtnetConnected] = useState(false);
+  const [artnetDestIp, setArtnetDestIp] = useState("127.0.0.1");
+  const [dmxTestStatus, setDmxTestStatus] = useState<"idle"|"running"|"ok"|"error">("idle");
+  const dmxTestIntervalRef = useRef<number | null>(null);
   const dmxCableTypeRef = useRef<"enttec-pro" | "raw">("enttec-pro");
 
   // Show engine
@@ -134,10 +138,15 @@ export default function Dashboard() {
   const startTimeRef = useRef<number>(0);
   const timerRef = useRef<number | null>(null);
   const writerRef = useRef<WritableStreamDefaultWriter<Uint8Array> | null>(null);
+  const portRef = useRef<SerialPort | null>(null);
+  const dmxBreakBusyRef = useRef(false);
+  const artnetWsRef = useRef<WebSocket | null>(null);
 
   // Refs for auto-advance (needed because onended callbacks have stale closures)
   const setlistRef = useRef<TrackData[]>([]);
   const currentTrackIdxRef = useRef(0);
+  // Prevents onended from auto-advancing when stop was triggered manually
+  const stoppedManuallyRef = useRef(false);
   useEffect(() => { setlistRef.current = setlist; }, [setlist]);
   useEffect(() => { currentTrackIdxRef.current = currentTrackIdx; }, [currentTrackIdx]);
 
@@ -178,8 +187,111 @@ export default function Dashboard() {
   // Keep the cable-type ref in sync so the dmxLoop closure reads the latest value
   useEffect(() => { dmxCableTypeRef.current = dmxCableType; }, [dmxCableType]);
 
+  // ── DMX test burst (3 s of continuous frames, no music needed) ──────────
+  const sendTestFrame = () => {
+    if (!portRef.current || !writerRef.current) return;
+    if (dmxTestIntervalRef.current) return; // already running
+
+    // Full-on test pattern: master dim, laser on, mid pattern, red color
+    const ch = new Array(15).fill(0);
+    ch[0]  = 255; // CH1 master dimmer full
+    ch[1]  = 255; // CH2 laser on
+    ch[2]  = 50;  // CH3 pattern
+    ch[4]  = 127; // CH5 X center
+    ch[5]  = 127; // CH6 Y center
+    ch[6]  = 127; // CH7 X zoom
+    ch[7]  = 127; // CH8 Y zoom
+    ch[8]  = 80;  // CH9 red color zone
+    ch[12] = 127; // CH13 draw speed
+    ch[13] = 127; // CH14 size
+    ch[14] = 8;   // CH15 segments
+
+    setDmxTestStatus("running");
+    let errorOccurred = false;
+
+    const sendFrame = async () => {
+      const port   = portRef.current;
+      const writer = writerRef.current;
+      if (!port || !writer) return;
+      try {
+        if (dmxCableTypeRef.current === "enttec-pro") {
+          const dataLen = ch.length + 1;
+          const packet  = new Uint8Array(5 + ch.length + 1);
+          packet[0] = 0x7E; packet[1] = 0x06;
+          packet[2] = dataLen & 0xFF; packet[3] = (dataLen >> 8) & 0xFF;
+          packet[4] = 0x00;
+          for (let i = 0; i < ch.length; i++) packet[5 + i] = ch[i];
+          packet[5 + ch.length] = 0xE7;
+          await writer.write(packet);
+        } else {
+          // Try break signal; if it throws, fall back to raw write
+          // Compact packet: start code + active channels only (fast write, no backpressure)
+          const data = new Uint8Array(ch.length + 1);
+          data[0] = 0x00; // DMX start code
+          for (let i = 0; i < ch.length; i++) data[i + 1] = ch[i];
+          // Break signal
+          try {
+            await port.setSignals({ break: true });
+            await new Promise(r => setTimeout(r, 3));
+            await port.setSignals({ break: false });
+            await new Promise(r => setTimeout(r, 1));
+          } catch (breakErr) {
+            console.warn("[DMX test] break not supported, sending raw:", breakErr);
+          }
+          // Wait for writer to be ready then send
+          await writer.ready;
+          await writer.write(data);
+          console.log("[DMX test] frame ok — channels:", Array.from(data.slice(1, 4)));
+        }
+      } catch (err) {
+        console.error("[DMX test] send failed:", err);
+        errorOccurred = true;
+      }
+    };
+
+    dmxTestIntervalRef.current = window.setInterval(() => { void sendFrame(); }, 25);
+
+    // Stop after 3 seconds
+    setTimeout(() => {
+      if (dmxTestIntervalRef.current) {
+        clearInterval(dmxTestIntervalRef.current);
+        dmxTestIntervalRef.current = null;
+      }
+      setDmxTestStatus(errorOccurred ? "error" : "ok");
+      setTimeout(() => setDmxTestStatus("idle"), 3000);
+    }, 3000);
+  };
+
+  // ── ArtNet WebSocket bridge ──────────────────────────────────────────────
+  const connectArtnet = () => {
+    if (artnetWsRef.current) {
+      artnetWsRef.current.close();
+      artnetWsRef.current = null;
+      setArtnetConnected(false);
+      return;
+    }
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const dest = encodeURIComponent(artnetDestIp.trim() || "127.0.0.1");
+    const ws = new WebSocket(`${proto}//${location.host}/api/dmx/ws?dest=${dest}`);
+    ws.onopen  = () => setArtnetConnected(true);
+    ws.onclose = () => { setArtnetConnected(false); artnetWsRef.current = null; };
+    ws.onerror = () => { setArtnetConnected(false); artnetWsRef.current = null; };
+    artnetWsRef.current = ws;
+  };
+
   // ── Hardware ────────────────────────────────────────────────────────────
   const connectPort = async () => {
+    // Already connected — disconnect and release COM port back to Windows
+    if (portRef.current) {
+      try {
+        writerRef.current?.releaseLock();
+        writerRef.current = null;
+        await portRef.current.close();
+      } catch { /* ignore close errors */ }
+      portRef.current = null;
+      setPort(null);
+      return;
+    }
     try {
       const p = await navigator.serial.requestPort();
       // ENTTEC Pro / SoundSwitch: 57600 baud, CDC framing handled by device firmware
@@ -193,6 +305,7 @@ export default function Dashboard() {
         flowControl: "none",
       });
       setPort(p);
+      portRef.current = p;
       writerRef.current = p.writable?.getWriter() ?? null;
     } catch { /* user cancelled or access denied */ }
   };
@@ -282,8 +395,11 @@ export default function Dashboard() {
 
   // ── Playback ─────────────────────────────────────────────────────────────
   const stopPlayback = useCallback(() => {
-    sourceNodeRef.current?.stop();
-    sourceNodeRef.current?.disconnect();
+    stoppedManuallyRef.current = true;
+    const src = sourceNodeRef.current;
+    sourceNodeRef.current = null;
+    try { src?.stop(); } catch { /* already stopped */ }
+    src?.disconnect();
     if (timerRef.current) clearInterval(timerRef.current);
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
     setIsPlaying(false);
@@ -344,6 +460,7 @@ export default function Dashboard() {
     if (!track || !audioCtxRef.current) return;
     if (isPlaying) { stopPlayback(); return; }
 
+    stoppedManuallyRef.current = false;
     const ctx = audioCtxRef.current;
     const source = ctx.createBufferSource();
     source.buffer = track.buffer;
@@ -371,6 +488,8 @@ export default function Dashboard() {
     // start from pattern 0 (circle) regardless of what the AI configured.
     timerRef.current = window.setInterval(dmxLoop, 25);
     source.onended = () => {
+      // If stopPlayback() was called manually, it already cleaned everything up — skip
+      if (stoppedManuallyRef.current) return;
       if (timerRef.current) clearInterval(timerRef.current);
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
       setIsFadingOut(false);
@@ -481,29 +600,56 @@ export default function Dashboard() {
     visualStateRef.current = result.visualState;
 
     if (writerRef.current) {
-      try {
-        const ch = result.channels;
-        let packet: Uint8Array;
-        if (dmxCableTypeRef.current === "enttec-pro") {
-          // ENTTEC DMX USB Pro / SoundSwitch protocol:
-          // [0x7E] [label=6] [len_lsb] [len_msb] [0x00=start_code] [ch...] [0xE7]
-          const dataLen = ch.length + 1; // +1 for the DMX start code byte
-          packet = new Uint8Array(5 + ch.length + 1);
-          packet[0] = 0x7E;                   // SOM
-          packet[1] = 0x06;                   // Label: Send DMX Packet Request
-          packet[2] = dataLen & 0xFF;         // Length LSB
-          packet[3] = (dataLen >> 8) & 0xFF;  // Length MSB
-          packet[4] = 0x00;                   // DMX start code
+      const ch = result.channels;
+      if (dmxCableTypeRef.current === "enttec-pro") {
+        // ENTTEC DMX USB Pro protocol:
+        // [0x7E] [label=6] [len_lsb] [len_msb] [0x00=start_code] [ch...] [0xE7]
+        try {
+          const dataLen = ch.length + 1;
+          const packet = new Uint8Array(5 + ch.length + 1);
+          packet[0] = 0x7E;
+          packet[1] = 0x06;
+          packet[2] = dataLen & 0xFF;
+          packet[3] = (dataLen >> 8) & 0xFF;
+          packet[4] = 0x00;
           for (let i = 0; i < ch.length; i++) packet[5 + i] = ch[i];
-          packet[5 + ch.length] = 0xE7;       // EOM
-        } else {
-          // Generic Open DMX: raw 250kbps — start code + channel data
-          packet = new Uint8Array(ch.length + 1);
-          packet[0] = 0x00;
-          for (let i = 0; i < ch.length; i++) packet[i + 1] = ch[i];
+          packet[5 + ch.length] = 0xE7;
+          writerRef.current.write(packet);
+        } catch { /* port error */ }
+      } else {
+        // Generic FT232 / Open DMX: generate proper DMX BREAK via setSignals,
+        // then send start code + channel data at 250kbps.
+        // Skip frame if previous break is still in progress (25ms interval is plenty).
+        if (!dmxBreakBusyRef.current && portRef.current) {
+          const port = portRef.current;
+          const writer = writerRef.current;
+          // Compact packet — fast write, no backpressure at 40 fps
+          const data = new Uint8Array(ch.length + 1);
+          data[0] = 0x00; // DMX start code
+          for (let i = 0; i < ch.length; i++) data[i + 1] = ch[i];
+          dmxBreakBusyRef.current = true;
+          void (async () => {
+            try {
+              try {
+                await port.setSignals({ break: true });
+                await new Promise(r => setTimeout(r, 3)); // 3ms break
+                await port.setSignals({ break: false });
+                await new Promise(r => setTimeout(r, 1)); // explicit MAB
+              } catch { /* driver doesn't support break — send raw */ }
+              await writer.ready;
+              await writer.write(data);
+            } catch { /* port closed */ }
+            finally { dmxBreakBusyRef.current = false; }
+          })();
         }
-        writerRef.current.write(packet);
-      } catch { /* port error, ignore */ }
+      }
+    }
+
+    // ── ArtNet output (WebSocket → API server → UDP → SoundSwitch) ──────
+    if (artnetWsRef.current?.readyState === WebSocket.OPEN) {
+      try {
+        artnetWsRef.current.send(JSON.stringify(result.channels));
+      } catch { /* ws error, ignore */ }
     }
   }, [track]);
 
@@ -512,8 +658,11 @@ export default function Dashboard() {
     if (!isPlaying || !audioCtxRef.current) return;
     const elapsed = audioCtxRef.current.currentTime - startTimeRef.current;
     pausedAtRef.current = elapsed;
-    sourceNodeRef.current?.stop();
-    sourceNodeRef.current?.disconnect();
+    stoppedManuallyRef.current = true;
+    const src = sourceNodeRef.current;
+    sourceNodeRef.current = null;
+    try { src?.stop(); } catch { /* already stopped */ }
+    src?.disconnect();
     if (timerRef.current) clearInterval(timerRef.current);
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
     setIsPlaying(false);
@@ -523,6 +672,7 @@ export default function Dashboard() {
 
   const _startSourceAt = useCallback((offset: number) => {
     if (!track || !audioCtxRef.current) return;
+    stoppedManuallyRef.current = false;
     const ctx = audioCtxRef.current;
     const source = ctx.createBufferSource();
     source.buffer = track.buffer;
@@ -543,6 +693,7 @@ export default function Dashboard() {
     setIsPaused(false);
     timerRef.current = window.setInterval(dmxLoop, 25);
     source.onended = () => {
+      if (stoppedManuallyRef.current) return;
       if (timerRef.current) clearInterval(timerRef.current);
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
       setIsFadingOut(false);
@@ -797,48 +948,34 @@ export default function Dashboard() {
                     </span>
                   </div>
 
-                  {/* AI Show Director chat */}
-                  <ShowChat
-                    laser={laser}
-                    overrides={showOverrides}
-                    onOverridesChange={applyOverrides}
-                    track={track}
-                    currentEnvelopes={currentEnvelopes}
-                    isPlaying={isPlaying}
-                    messages={chatMessages}
-                    onMessagesChange={setChatMessages}
-                  />
-
                   {/* DMX connect */}
                   {webSerialSupported && (
                     <div className="space-y-2">
-                      {/* Cable type selector — only show when not connected */}
-                      {!port && (
-                        <div className="flex rounded-sm border border-zinc-800 overflow-hidden text-[10px]">
-                          <button
-                            onClick={() => setDmxCableType("enttec-pro")}
-                            className={cn(
-                              "flex-1 px-2 py-1.5 transition-colors",
-                              dmxCableType === "enttec-pro"
-                                ? "bg-[#00ff9d]/10 text-[#00ff9d] border-r border-[#00ff9d]/20"
-                                : "text-zinc-600 hover:text-zinc-400 border-r border-zinc-800"
-                            )}
-                          >
-                            ENTTEC Pro / SoundSwitch
-                          </button>
-                          <button
-                            onClick={() => setDmxCableType("raw")}
-                            className={cn(
-                              "flex-1 px-2 py-1.5 transition-colors",
-                              dmxCableType === "raw"
-                                ? "bg-[#00ff9d]/10 text-[#00ff9d]"
-                                : "text-zinc-600 hover:text-zinc-400"
-                            )}
-                          >
-                            Generic USB-DMX
-                          </button>
-                        </div>
-                      )}
+                      {/* Cable type selector — always visible so you can switch while connected */}
+                      <div className="flex rounded-sm border border-zinc-800 overflow-hidden text-[10px]">
+                        <button
+                          onClick={() => setDmxCableType("enttec-pro")}
+                          className={cn(
+                            "flex-1 px-2 py-1.5 transition-colors",
+                            dmxCableType === "enttec-pro"
+                              ? "bg-[#00ff9d]/10 text-[#00ff9d] border-r border-[#00ff9d]/20"
+                              : "text-zinc-600 hover:text-zinc-400 border-r border-zinc-800"
+                          )}
+                        >
+                          ENTTEC Pro / SoundSwitch
+                        </button>
+                        <button
+                          onClick={() => setDmxCableType("raw")}
+                          className={cn(
+                            "flex-1 px-2 py-1.5 transition-colors",
+                            dmxCableType === "raw"
+                              ? "bg-[#00ff9d]/10 text-[#00ff9d]"
+                              : "text-zinc-600 hover:text-zinc-400"
+                          )}
+                        >
+                          Generic USB-DMX
+                        </button>
+                      </div>
                       <Button
                         onClick={connectPort}
                         variant="outline"
@@ -853,8 +990,60 @@ export default function Dashboard() {
                           ? `DMX Connected · ${dmxCableType === "enttec-pro" ? "ENTTEC Pro" : "Raw 250k"}`
                           : "Connect DMX Hardware"}
                       </Button>
+
+                      {/* Test button — only when connected */}
+                      {port && (
+                        <Button
+                          onClick={() => { void sendTestFrame(); }}
+                          variant="outline"
+                          size="sm"
+                          className={cn(
+                            "w-full rounded-sm text-xs border-zinc-800",
+                            dmxTestStatus === "ok"    && "border-[#00ff9d]/60 text-[#00ff9d]",
+                            dmxTestStatus === "error" && "border-red-500/60 text-red-400",
+                            dmxTestStatus === "idle"  && "text-zinc-500 hover:text-white"
+                          )}
+                        >
+                          {dmxTestStatus === "running" ? "⟳ Sending 3 s burst…" :
+                           dmxTestStatus === "ok"     ? "✓ Burst done — did laser respond?" :
+                           dmxTestStatus === "error"  ? "✗ Send failed — check console" :
+                           "Send Test Frame (3 s burst)"}
+                        </Button>
+                      )}
                     </div>
                   )}
+
+                  {/* ArtNet → SoundSwitch bridge */}
+                  <div className="pt-2 border-t border-zinc-800/60 space-y-1.5">
+                    <div className="text-[9px] uppercase tracking-widest text-zinc-600 flex items-center gap-1.5">
+                      <span className={cn("w-1.5 h-1.5 rounded-full", artnetConnected ? "bg-[#00ff9d]" : "bg-zinc-700")} />
+                      ArtNet → SoundSwitch
+                    </div>
+                    {!artnetConnected && (
+                      <input
+                        type="text"
+                        value={artnetDestIp}
+                        onChange={e => setArtnetDestIp(e.target.value)}
+                        placeholder="127.0.0.1"
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-sm px-2 py-1 text-[10px] text-zinc-300 placeholder-zinc-700 focus:outline-none focus:border-zinc-600"
+                      />
+                    )}
+                    <Button
+                      onClick={connectArtnet}
+                      variant="outline"
+                      size="sm"
+                      className={cn(
+                        "w-full border-zinc-800 text-zinc-400 hover:text-white rounded-sm text-xs",
+                        artnetConnected && "border-[#00ff9d]/40 text-[#00ff9d]"
+                      )}
+                    >
+                      <Usb className="w-3 h-3 mr-1.5" />
+                      {artnetConnected ? "ArtNet Active · Disconnect" : "Connect via ArtNet"}
+                    </Button>
+                    <p className="text-[9px] text-zinc-700 leading-tight">
+                      Streams DMX to SoundSwitch on the same machine. In SoundSwitch: Settings → Enable ArtNet input → Universe 0.
+                    </p>
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -1059,6 +1248,49 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* ── AI Show Director — always visible ───────────────────────── */}
+        <Card className="border-[#00ff9d]/30 bg-[#08080f] shadow-xl">
+          <CardHeader className="pb-2 pt-4 px-5">
+            <CardTitle className="text-sm uppercase tracking-widest text-[#00ff9d] flex items-center gap-2">
+              <Zap className="w-4 h-4" /> AI Show Director
+              <span className="ml-2 text-[10px] font-normal text-zinc-500 normal-case tracking-normal">
+                Describe the show you want · AI sets all parameters
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-5 pb-4 space-y-3">
+            <ShowChat
+              laser={laser}
+              overrides={showOverrides}
+              onOverridesChange={applyOverrides}
+              track={track}
+              currentEnvelopes={currentEnvelopes}
+              isPlaying={isPlaying}
+              messages={chatMessages}
+              onMessagesChange={setChatMessages}
+            />
+            {/* Burst test button — only when hardware connected */}
+            {port && (
+              <Button
+                onClick={() => { void sendTestFrame(); }}
+                variant="outline"
+                size="sm"
+                className={cn(
+                  "w-full rounded-sm text-xs border-zinc-800",
+                  dmxTestStatus === "ok"    && "border-[#00ff9d]/60 text-[#00ff9d]",
+                  dmxTestStatus === "error" && "border-red-500/60 text-red-400",
+                  dmxTestStatus === "idle"  && "text-zinc-500 hover:text-white"
+                )}
+              >
+                {dmxTestStatus === "running" ? "⟳ Sending 3 s burst…" :
+                 dmxTestStatus === "ok"      ? "✓ Burst done — did laser respond?" :
+                 dmxTestStatus === "error"   ? "✗ Send failed — check console" :
+                 "⚡ Send Test Frame (3 s burst)"}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
 
         {/* ── Laser Show Preview Canvas ───────────────────────────────── */}
         <Card className="border-zinc-800/60 bg-black shadow-2xl" style={{ minHeight: 340, flex: 1 }}>
@@ -1272,7 +1504,7 @@ export default function Dashboard() {
 // ─────────────────────────────────────────────────────────────────────────────
 // AI Show Director — ShowChat component
 // ─────────────────────────────────────────────────────────────────────────────
-const RELEASE_BASE = "https://github.com/tnelson933p/ai-laser-show-creation/releases/download/v2.0.2";
+const RELEASE_BASE = "https://github.com/tnelson933p/ai-laser-show-creation/releases/download/v1.0.5";
 
 const DOWNLOAD_OPTIONS = [
   {
@@ -1401,7 +1633,7 @@ function ShowChat({
   messages,
   onMessagesChange,
 }: {
-  laser: LaserModel;
+  laser: LaserModel | null;
   overrides: ShowOverrides;
   onOverridesChange: (o: ShowOverrides) => void;
   track: TrackData | null;
@@ -1463,7 +1695,7 @@ function ShowChat({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          laser: {
+          laser: laser ? {
             brand: laser.brand,
             model: laser.model,
             channelCount: laser.channelCount,
@@ -1473,7 +1705,7 @@ function ShowChat({
             specialFeatures: laser.specialFeatures,
             maxPowerMw: laser.maxPowerMw,
             notes: laser.strategy?.notes ?? "",
-          },
+          } : null,
           messages: updatedMsgs.map(m => ({ role: m.role, content: m.content })),
           currentSettings: overrides,
           musicContext,
@@ -1563,36 +1795,52 @@ function ShowChat({
 
   const activeCount = Object.keys(overrides).length;
 
+  const quickPrompts = [
+    "🔥 Aggressive EDM — fast strobes, hard cuts on bass drops",
+    "🌊 Slow & hypnotic — wide sweeps, smooth colour fades",
+    "⚡ Full chaos — max everything, push the laser hard",
+    "🎯 Simple & clean — one or two patterns, no strobe",
+    "🌈 Colour wash only — no movement, reactive colour changes",
+  ];
+
   return (
-    <div className="bg-black/60 border border-zinc-800/60 rounded-sm flex flex-col" style={{ minHeight: 220 }}>
-      {/* Header */}
-      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-zinc-800/60 flex-shrink-0">
-        <Cpu className="w-3 h-3 text-[#00ff9d]" />
-        <span className="text-[10px] text-[#00ff9d] uppercase tracking-widest font-bold">AI Show Director</span>
-        {activeCount > 0 && (
-          <span className="ml-auto text-[9px] text-[#00ff9d]/50 border border-[#00ff9d]/20 rounded px-1.5 py-0.5">
-            {activeCount} override{activeCount > 1 ? "s" : ""} active
+    <div className="flex flex-col" style={{ minHeight: 260 }}>
+      {/* Active overrides indicator */}
+      {activeCount > 0 && (
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[9px] text-[#00ff9d]/70 border border-[#00ff9d]/20 rounded px-1.5 py-0.5">
+            {activeCount} setting{activeCount > 1 ? "s" : ""} active
           </span>
-        )}
-        {activeCount > 0 && (
           <button
             onClick={() => onOverridesChange({})}
-            className="text-[9px] text-zinc-600 hover:text-zinc-400 transition-colors ml-1"
+            className="text-[9px] text-zinc-600 hover:text-red-400 transition-colors"
             title="Reset all AI overrides"
           >
             reset
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Message list */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-2 space-y-2" style={{ minHeight: 120, maxHeight: 240 }}>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-2 space-y-2" style={{ minHeight: 140, maxHeight: 260 }}>
         {messages.length === 0 && (
-          <p className="text-[11px] leading-relaxed text-zinc-600 italic px-1 pt-1">
-            {laser.strategy.notes}
-            <br /><br />
-            <span className="not-italic text-zinc-700">Try: "make the bass more aggressive" · "kill the strobe" · "slow it down and make it hypnotic" · "keep it simple"</span>
-          </p>
+          <div className="px-1 pt-1 space-y-2">
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              {laser?.strategy?.notes ?? "Select your laser model, then describe the show you want — e.g. \"aggressive EDM with hard strobes\" or \"slow and hypnotic colour wash\"."}
+            </p>
+            <p className="text-[10px] text-zinc-600 font-bold uppercase tracking-wider">Quick starts — click to use:</p>
+            <div className="space-y-1">
+              {quickPrompts.map((qp, i) => (
+                <button
+                  key={i}
+                  onClick={() => { setInput(qp); }}
+                  className="w-full text-left text-[10px] text-zinc-500 hover:text-[#00ff9d] hover:bg-[#00ff9d]/5 border border-zinc-800/60 hover:border-[#00ff9d]/20 rounded px-2 py-1.5 transition-all leading-snug"
+                >
+                  {qp}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -1652,7 +1900,7 @@ function ShowChat({
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKey}
-          placeholder={streaming ? "waiting for response…" : "Tell the AI what to change or keep…"}
+          placeholder={streaming ? "AI is thinking…" : "Describe your show, or click a quick start above…"}
           disabled={streaming}
           className="flex-1 bg-zinc-900 border border-zinc-800 rounded-sm px-2 py-1.5 text-[11px] text-zinc-200 placeholder:text-zinc-700 focus:outline-none focus:border-[#00ff9d]/30 disabled:opacity-40 transition-colors"
         />
