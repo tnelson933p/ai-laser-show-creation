@@ -239,6 +239,94 @@ fn stop_playback(state: State<AppState>) {
     state.current_frame.store(0, Ordering::Relaxed);
 }
 
+/// Seek to an offset (in seconds) and resume playback from that position.
+/// Stops any running threads, waits briefly for them to exit, then relaunches
+/// from the given sample/frame offset.
+#[tauri::command]
+fn seek_and_play(offset_secs: f64, state: State<AppState>) -> Result<(), String> {
+    // Stop existing threads
+    state.playback_running.store(false, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(120));
+
+    let audio = {
+        let guard = state.audio.lock();
+        match guard.as_ref() {
+            Some(a) => Arc::clone(a),
+            None => return Err("No audio loaded".into()),
+        }
+    };
+
+    let sample_rate = audio.analysis.sample_rate;
+    let frame_start = (offset_secs * 40.0) as usize;
+    let sample_offset = (offset_secs * sample_rate as f64) as usize;
+
+    let running = Arc::clone(&state.playback_running);
+    let frame_arc = Arc::clone(&state.current_frame);
+    let dmx = state.dmx.clone();
+    let profile = state.profile.lock().clone();
+    let audio_clone = Arc::clone(&audio);
+
+    state.playback_running.store(true, Ordering::Relaxed);
+    state.current_frame.store(frame_start as u64, Ordering::Relaxed);
+
+    // Audio thread — skip to sample offset
+    let samples = audio.samples.clone();
+    let running_audio = Arc::clone(&running);
+    std::thread::spawn(move || {
+        use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
+        let (_stream, stream_handle) = match OutputStream::try_default() {
+            Ok(v) => v,
+            Err(e) => { eprintln!("Audio output error: {}", e); return; }
+        };
+        let sink = match Sink::try_new(&stream_handle) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("Sink error: {}", e); return; }
+        };
+        let start = sample_offset.min(samples.len());
+        let sliced = samples[start..].to_vec();
+        let source = SamplesBuffer::new(1, sample_rate, sliced);
+        sink.append(source);
+        while !sink.empty() {
+            if !running_audio.load(Ordering::Relaxed) {
+                sink.stop();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    // DMX thread — start from frame_start, increment locally for steady pacing
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        let mut local_frame = 0usize;
+        loop {
+            if !running.load(Ordering::Relaxed) { break; }
+            let frame_idx = frame_start + local_frame;
+            if frame_idx >= audio_clone.envelopes.len() {
+                running.store(false, Ordering::Relaxed);
+                break;
+            }
+            frame_arc.store(frame_idx as u64, Ordering::Relaxed);
+            let elapsed = frame_idx as f64 / 40.0;
+            let env = &audio_clone.envelopes[frame_idx];
+            let bpm_phase = bpm_phase_at(elapsed, audio_clone.analysis.bpm);
+            let freq_env = FrequencyEnvelopes { bass: env.bass, mid: env.mid, high: env.high, bpm_phase };
+            let packet = match profile {
+                LaserProfile::EytseEY003L    => build_eytse_packet(&freq_env, elapsed),
+                LaserProfile::Generic7Channel => build_generic7_packet(&freq_env, elapsed),
+                LaserProfile::Custom          => [0u8; 16],
+            };
+            let _ = dmx.send_packet(&packet);
+            local_frame += 1;
+            let next = start + Duration::from_millis(local_frame as u64 * 25);
+            let now = Instant::now();
+            if next > now { std::thread::sleep(next - now); }
+        }
+    });
+
+    Ok(())
+}
+
 /// Send 120 frames (3 seconds at 40 Hz) of a static test pattern so the user
 /// can verify the cable and laser respond without needing a music file loaded.
 /// The command returns immediately; the burst runs on a background thread.
@@ -325,6 +413,7 @@ fn main() {
             get_current_envelopes,
             start_playback,
             stop_playback,
+            seek_and_play,
             test_dmx_burst,
         ])
         .run(tauri::generate_context!())
