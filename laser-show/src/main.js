@@ -80,6 +80,7 @@ const state = {
   lastPatternBeat: -1,
   energyHistory: [],
   zoomDecay: 0,
+  pendingSeek: null,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -340,7 +341,8 @@ function computeDmx(bass, mid, high, bpm, elapsed) {
 
   const beatDur = 60 / bpm;
   const beatsPerTick = (1/40) / beatDur;
-  state.phase += beatsPerTick * Math.PI * 2;
+  const movSpeed = typeof aiShowOverrides.movementSpeed === 'number' ? aiShowOverrides.movementSpeed : 1.0;
+  state.phase += beatsPerTick * Math.PI * 2 * movSpeed;
 
   const energy = bass * 0.5 + mid * 0.3 + high * 0.2;
   state.energyHistory.push(energy);
@@ -348,7 +350,7 @@ function computeDmx(bass, mid, high, bpm, elapsed) {
   const avgE = state.energyHistory.reduce((a,b)=>a+b,0) / state.energyHistory.length;
 
   const absB = Math.floor(elapsed / beatDur);
-  const shiftBeats = laser.scanTier === 'pro' ? 32 : laser.scanTier === 'fast' ? 16 : 8;
+  const shiftBeats = aiShowOverrides.patternShiftBeats ?? (laser.scanTier === 'pro' ? 32 : laser.scanTier === 'fast' ? 16 : 8);
   if (absB > 0 && absB % shiftBeats === 0 && absB !== state.lastPatternBeat) {
     state.lastPatternBeat = absB;
     state.patternIdx = (state.patternIdx + 1) % LISSAJOUS.length;
@@ -360,7 +362,7 @@ function computeDmx(bass, mid, high, bpm, elapsed) {
   const xNorm = Math.sin(a * t + delta) * 0.5 + 0.5;
   const yNorm = Math.sin(b * t) * 0.5 + 0.5;
 
-  const bassThresh = laser.scanTier === 'pro' ? 0.45 : laser.scanTier === 'fast' ? 0.5 : 0.6;
+  const bassThresh = aiShowOverrides.bassThreshold ?? (laser.scanTier === 'pro' ? 0.45 : laser.scanTier === 'fast' ? 0.5 : 0.6);
   if (bass > bassThresh) state.zoomDecay = 1.0;
   state.zoomDecay *= 0.94;
   const zoom = Math.round((0.39 + state.zoomDecay * 0.61) * 255);
@@ -378,8 +380,10 @@ function computeDmx(bass, mid, high, bpm, elapsed) {
     if (mid > 0.65) { red = Math.min(255, red + mid * 100); green = Math.min(255, green + mid * 80); }
   }
 
-  const strobe = (high > 0.75 && energy > 0.65) ? Math.round(50 + high * 170) : 0;
-  const gratingOn = energy > 0.65 && energy > avgE * 1.1;
+  const strobeOk = aiShowOverrides.strobeEnabled !== false;
+  const strobe = strobeOk && (high > 0.75 && energy > 0.65) ? Math.round(50 + high * 170) : 0;
+  const gratingOk = aiShowOverrides.gratingEnabled !== false;
+  const gratingOn = gratingOk && energy > 0.65 && energy > avgE * 1.1;
   const grating = gratingOn ? Math.round(120 + energy * 135) : 0;
   const gratingRot = gratingOn ? Math.round(rotation * 0.5) : 0;
 
@@ -492,6 +496,7 @@ function stopPoll() { clearInterval(state.pollId); state.pollId = null; }
 function animFrame() {
   drawSpectrum();
   drawPreview();
+  tickSceneEngine();
   state.rafId = requestAnimationFrame(animFrame);
 }
 requestAnimationFrame(animFrame);
@@ -499,9 +504,15 @@ requestAnimationFrame(animFrame);
 // ── Playback control ──────────────────────────────────────────────────────────
 async function startPlayback() {
   try {
-    await invoke('start_playback');
+    if (state.pendingSeek != null) {
+      await invoke('seek_and_play', { offsetSecs: state.pendingSeek });
+      state.startTime  = Date.now() - state.pendingSeek * 1000;
+      state.pendingSeek = null;
+    } else {
+      await invoke('start_playback');
+      state.startTime = Date.now();
+    }
     state.playing   = true;
-    state.startTime = Date.now();
     state.phase     = 0;
     state.patternIdx = 0;
     state.lastPatternBeat = -1;
@@ -757,12 +768,12 @@ if (btnSaveAiUrl) {
   });
 }
 
-// Quick prompts
+// Quick prompts — set input AND immediately send
 document.querySelectorAll('.ai-quick-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     if (aiInput) {
       aiInput.value = btn.dataset.prompt;
-      aiInput.focus();
+      sendAiMessage();
     }
   });
 });
@@ -859,33 +870,35 @@ async function sendAiMessage() {
           if (data.error) throw new Error(data.error);
           if (data.content) {
             accumulated += data.content;
-            // Strip JSON fences for display
+            // Strip <settings> blocks for display
             const display = accumulated
-              .replace(/```json[\s\S]*?```/g, '')
-              .replace(/```[\s\S]*?```/g, '')
+              .replace(/<settings>[\s\S]*?<\/settings>/g, '')
               .trim();
             placeholderEl.textContent = display || accumulated;
           }
           if (data.done) {
-            // Parse any trailing JSON settings block
-            const match = accumulated.match(/```json\s*([\s\S]*?)\s*```/);
+            // Parse <settings>{...}</settings> block from the API response
+            const match = accumulated.match(/<settings>([\s\S]*?)<\/settings>/);
             let settings = null;
             if (match) {
               try { settings = JSON.parse(match[1]); } catch { /* ignore */ }
             }
             const displayText = accumulated
-              .replace(/```json[\s\S]*?```/g, '')
-              .replace(/```[\s\S]*?```/g, '')
+              .replace(/<settings>[\s\S]*?<\/settings>/g, '')
               .trim();
 
             placeholderEl.textContent = displayText || accumulated;
 
             if (settings && Object.keys(settings).length > 0) {
               aiShowOverrides = { ...aiShowOverrides, ...settings };
+              buildSceneTimes();
+              renderSceneList();
+              renderSceneTimeline();
               if (aiActiveBadge) aiActiveBadge.classList.remove('hidden');
               const badge = document.createElement('div');
               badge.className = 'ai-msg-applied';
-              badge.textContent = '✓ Updated: ' + Object.keys(settings).join(', ');
+              const sceneNote = sceneTimes.length ? ` · ${sceneTimes.length} scenes` : '';
+              badge.textContent = '✓ Updated: ' + Object.keys(settings).join(', ') + sceneNote;
               placeholderEl.appendChild(badge);
             }
 
@@ -909,3 +922,293 @@ if (aiSend)  aiSend.addEventListener('click', sendAiMessage);
 if (aiInput) aiInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(); }
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SCENE ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
+
+let sceneTimes = [];
+let currentSceneIdx = -1;
+
+function buildSceneTimes() {
+  const seq = aiShowOverrides.sequence;
+  if (!Array.isArray(seq) || !seq.length) { sceneTimes = []; return; }
+  const bpm = state.bpm || 120;
+  const beatDur = 60 / bpm;
+  const barDur = beatDur * 4;
+  let offset = 0;
+  sceneTimes = seq.map((scene, i) => {
+    const bars = scene.durationBars ?? 8;
+    const dur = bars * barDur;
+    const entry = { ...scene, startTime: offset, endTime: offset + dur, idx: i };
+    offset += dur;
+    return entry;
+  });
+}
+
+function getSceneIdxAtTime(elapsed) {
+  if (!sceneTimes.length) return -1;
+  for (let i = sceneTimes.length - 1; i >= 0; i--) {
+    if (elapsed >= sceneTimes[i].startTime) return i;
+  }
+  return 0;
+}
+
+async function seekToScene(idx) {
+  const scene = sceneTimes[idx];
+  if (!scene) return;
+  const offsetSecs = scene.startTime;
+  if (state.playing) {
+    state.startTime = Date.now() - offsetSecs * 1000;
+    try { await invoke('seek_and_play', { offsetSecs }); }
+    catch (e) { console.warn('seek_and_play failed:', e); }
+  } else {
+    state.pendingSeek = offsetSecs;
+  }
+  currentSceneIdx = idx;
+  updateSceneHighlights(idx);
+  scrollTimelineToScene(idx);
+  updatePreviewSceneLabel(idx);
+}
+
+function updateSceneHighlights(idx) {
+  document.querySelectorAll('.scene-card').forEach((card, i) => {
+    card.classList.toggle('active', i === idx);
+  });
+  document.querySelectorAll('.scene-chip').forEach((chip, i) => {
+    chip.classList.toggle('active', i === idx);
+  });
+}
+
+function scrollTimelineToScene(idx) {
+  const timeline = document.getElementById('scene-timeline');
+  if (!timeline) return;
+  const chip = timeline.querySelectorAll('.scene-chip')[idx];
+  if (chip) chip.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+}
+
+function updatePreviewSceneLabel(idx) {
+  const label = document.getElementById('preview-scene-label');
+  if (!label) return;
+  const scene = sceneTimes[idx];
+  if (!scene) { label.classList.add('hidden'); return; }
+  label.classList.remove('hidden');
+  const bars = scene.durationBars ?? 8;
+  label.textContent = `SCENE ${idx + 1} — ${scene.label ?? 'Untitled'} · ${bars} bars`;
+}
+
+function renderSceneList() {
+  const el = document.getElementById('scene-list');
+  if (!el) return;
+  if (!sceneTimes.length) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+
+  el.innerHTML = `
+    <div class="scene-list-header">
+      <span class="scene-list-title">SHOW SCENES</span>
+      <span class="scene-list-count">${sceneTimes.length} scenes</span>
+    </div>
+    <div class="scene-cards">
+      ${sceneTimes.map((scene, i) => {
+        const bars = scene.durationBars ?? 8;
+        const style = scene.movementStyle ?? '';
+        const speed = scene.movementSpeed != null ? `×${scene.movementSpeed}` : '';
+        const strobeB = scene.strobeEnabled === true ? '⚡strobe' : '';
+        const gratingB = scene.gratingEnabled === true ? '✦grating' : '';
+        const badges = [style, speed, strobeB, gratingB].filter(Boolean)
+          .map(b => `<span class="scene-badge">${b}</span>`).join('');
+        return `
+          <div class="scene-card" data-idx="${i}">
+            <div class="scene-card-top">
+              <span class="scene-num">${i + 1}</span>
+              <span class="scene-name">${scene.label ?? 'Scene ' + (i + 1)}</span>
+              <span class="scene-bars">${bars} bars</span>
+            </div>
+            ${badges ? `<div class="scene-card-badges">${badges}</div>` : ''}
+            <div class="scene-card-actions">
+              <button class="scene-seek-btn" data-idx="${i}">▶ Preview</button>
+              <button class="scene-edit-btn" data-idx="${i}">✏ Edit scene</button>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  el.querySelectorAll('.scene-seek-btn').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); seekToScene(parseInt(btn.dataset.idx)); });
+  });
+  el.querySelectorAll('.scene-edit-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.idx);
+      const scene = sceneTimes[idx];
+      if (!scene || !aiInput) return;
+      const name = scene.label ?? `Scene ${idx + 1}`;
+      aiInput.value = `For scene ${idx + 1} ("${name}"): `;
+      aiInput.focus();
+      document.querySelector('[data-panel="show"]')?.click();
+    });
+  });
+  el.querySelectorAll('.scene-card').forEach(card => {
+    card.addEventListener('click', e => {
+      if (e.target.classList.contains('scene-seek-btn') || e.target.classList.contains('scene-edit-btn')) return;
+      seekToScene(parseInt(card.dataset.idx));
+    });
+  });
+}
+
+function renderSceneTimeline() {
+  const el = document.getElementById('scene-timeline');
+  if (!el) return;
+  if (!sceneTimes.length) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+
+  el.innerHTML = sceneTimes.map((scene, i) => {
+    const bars = scene.durationBars ?? 8;
+    const flex = Math.max(4, Math.min(18, bars * 1.2));
+    return `
+      <div class="scene-chip" data-idx="${i}" style="flex:${flex}">
+        <span class="scene-chip-num">${i + 1}</span>
+        <span class="scene-chip-label">${scene.label ?? 'Scene ' + (i + 1)}</span>
+        <span class="scene-chip-bars">${bars}b</span>
+      </div>
+    `;
+  }).join('');
+
+  el.querySelectorAll('.scene-chip').forEach(chip => {
+    chip.addEventListener('click', () => seekToScene(parseInt(chip.dataset.idx)));
+  });
+}
+
+function tickSceneEngine() {
+  if (!sceneTimes.length) return;
+  if (!state.playing || state.startTime === null) return;
+  const elapsed = (Date.now() - state.startTime) / 1000;
+  const newIdx = getSceneIdxAtTime(elapsed);
+  if (newIdx !== currentSceneIdx && newIdx >= 0) {
+    currentSceneIdx = newIdx;
+    updateSceneHighlights(newIdx);
+    updatePreviewSceneLabel(newIdx);
+    const scene = sceneTimes[newIdx];
+    if (scene) {
+      const sceneKeys = ['movementStyle', 'movementSpeed', 'strobeEnabled',
+                         'gratingEnabled', 'bassThreshold', 'patternShiftBeats', 'colorIntensity'];
+      sceneKeys.forEach(k => { if (scene[k] !== undefined) aiShowOverrides[k] = scene[k]; });
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SHOW LIBRARY
+// ══════════════════════════════════════════════════════════════════════════════
+
+const LIBRARY_KEY = 'ai-lasershow-library';
+
+function getLibrary() {
+  try { return JSON.parse(localStorage.getItem(LIBRARY_KEY) || '[]'); }
+  catch { return []; }
+}
+
+function saveCurrentShow(name) {
+  if (!Object.keys(aiShowOverrides).length) {
+    alert('Nothing to save — ask the AI Director to create a show first.');
+    return null;
+  }
+  const library = getLibrary();
+  const show = {
+    id: Date.now().toString(),
+    name: name || 'Untitled Show',
+    createdAt: new Date().toISOString(),
+    overrides: JSON.parse(JSON.stringify(aiShowOverrides)),
+    chatHistory: aiChatHistory.slice(-20),
+    sceneCount: sceneTimes.length,
+  };
+  library.unshift(show);
+  localStorage.setItem(LIBRARY_KEY, JSON.stringify(library.slice(0, 50)));
+  renderLibrary();
+  return show;
+}
+
+function loadShow(id) {
+  const library = getLibrary();
+  const show = library.find(s => s.id === id);
+  if (!show) return;
+  aiShowOverrides = JSON.parse(JSON.stringify(show.overrides));
+  if (show.chatHistory?.length) aiChatHistory = [...show.chatHistory];
+  buildSceneTimes();
+  renderSceneList();
+  renderSceneTimeline();
+  if (aiActiveBadge) aiActiveBadge.classList.remove('hidden');
+  if (aiMessages && aiEmptyState) {
+    aiEmptyState.classList.add('hidden');
+    const notice = document.createElement('div');
+    notice.className = 'ai-msg-assistant';
+    notice.textContent = `✓ Loaded: "${show.name}" · ${show.sceneCount || 0} scenes`;
+    aiMessages.appendChild(notice);
+    aiMessages.scrollTop = aiMessages.scrollHeight;
+  }
+  document.querySelector('[data-panel="show"]')?.click();
+}
+
+function deleteShow(id) {
+  if (!confirm('Delete this show from the library?')) return;
+  const library = getLibrary().filter(s => s.id !== id);
+  localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
+  renderLibrary();
+}
+
+function renderLibrary() {
+  const list = document.getElementById('library-list');
+  const empty = document.getElementById('library-empty');
+  if (!list || !empty) return;
+  const library = getLibrary();
+  if (!library.length) {
+    empty.classList.remove('hidden');
+    list.innerHTML = '';
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = library.map(show => {
+    const date = new Date(show.createdAt).toLocaleDateString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric',
+    });
+    const scenes = show.sceneCount ? `· ${show.sceneCount} scenes` : '';
+    return `
+      <div class="library-entry">
+        <div class="library-entry-info">
+          <span class="library-entry-name">${show.name}</span>
+          <span class="library-entry-meta">${date} ${scenes}</span>
+        </div>
+        <div class="library-entry-actions">
+          <button class="library-load-btn" data-id="${show.id}">Load</button>
+          <button class="library-delete-btn" data-id="${show.id}">✕</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  list.querySelectorAll('.library-load-btn').forEach(btn => {
+    btn.addEventListener('click', () => loadShow(btn.dataset.id));
+  });
+  list.querySelectorAll('.library-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => deleteShow(btn.dataset.id));
+  });
+}
+
+const aiSaveBtn = document.getElementById('ai-save-show');
+if (aiSaveBtn) {
+  aiSaveBtn.addEventListener('click', () => {
+    const name = prompt('Name this show:', 'My Show ' + new Date().toLocaleDateString());
+    if (name !== null) {
+      const saved = saveCurrentShow(name || 'Untitled Show');
+      if (saved) {
+        const orig = aiSaveBtn.textContent;
+        aiSaveBtn.textContent = '✓ Saved!';
+        setTimeout(() => { aiSaveBtn.textContent = orig; }, 1600);
+      }
+    }
+  });
+}
+
+renderLibrary();
