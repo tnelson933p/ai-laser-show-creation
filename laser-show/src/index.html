@@ -137,6 +137,7 @@
         <button class="nav-item" data-panel="preview">Preview</button>
         <button class="nav-item" data-panel="channels">Channels</button>
         <button class="nav-item" data-panel="settings">Settings</button>
+        <button class="nav-item" data-panel="library">Library</button>
       </nav>
 
       <div class="hw-status">
@@ -248,6 +249,7 @@
             <span class="ai-director-title">AI Show Director</span>
             <span class="ai-director-sub">Describe your show · AI sets all parameters</span>
             <span id="ai-active-badge" class="ai-active-badge hidden">● active</span>
+            <button id="ai-save-show" class="ai-save-btn" title="Save show to library">💾 Save</button>
           </div>
 
           <div id="ai-messages" class="ai-messages">
@@ -271,13 +273,22 @@
           <div id="ai-api-status" class="ai-api-status hidden"></div>
         </div>
 
+        <!-- Scene list — shown when AI generates a sequence -->
+        <div id="scene-list" class="scene-list hidden"></div>
+
       </section>
 
       <!-- PREVIEW PANEL -->
       <section id="panel-preview" class="panel">
-        <h2>Laser Show Preview</h2>
-        <p class="sub">Live visual simulation of what your laser will display</p>
+        <div class="preview-header">
+          <div>
+            <h2>Laser Show Preview</h2>
+            <p class="sub">Live visual simulation · click a scene chip to jump there</p>
+          </div>
+          <div id="preview-scene-label" class="preview-scene-label hidden"></div>
+        </div>
         <canvas id="preview-canvas" class="preview-canvas"></canvas>
+        <div id="scene-timeline" class="scene-timeline hidden"></div>
       </section>
 
       <!-- CHANNELS PANEL -->
@@ -339,6 +350,17 @@
           <button id="btn-save-ai-url" class="btn-ghost" style="margin-top:.5rem">Save</button>
           <span id="ai-url-saved" style="font-size:.7rem;color:#00ff9d;margin-left:.5rem;display:none">✓ Saved</span>
         </div>
+      </section>
+
+      <!-- LIBRARY PANEL -->
+      <section id="panel-library" class="panel">
+        <h2>Show Library</h2>
+        <p class="sub">Save and reload complete shows — scenes, settings, and AI strategy</p>
+        <div id="library-empty" class="library-empty">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="1.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg>
+          <p>No shows saved yet. Use the <strong>💾 Save</strong> button in the AI Director to save your current show.</p>
+        </div>
+        <div id="library-list" class="library-list"></div>
       </section>
 
     </main>
