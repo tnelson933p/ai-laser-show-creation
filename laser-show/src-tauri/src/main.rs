@@ -239,6 +239,75 @@ fn stop_playback(state: State<AppState>) {
     state.current_frame.store(0, Ordering::Relaxed);
 }
 
+/// Send 120 frames (3 seconds at 40 Hz) of a static test pattern so the user
+/// can verify the cable and laser respond without needing a music file loaded.
+/// The command returns immediately; the burst runs on a background thread.
+#[tauri::command]
+fn test_dmx_burst(state: State<AppState>) -> Result<(), String> {
+    if !state.dmx.is_connected() {
+        return Err("Not connected — connect the DMX adapter first".into());
+    }
+    if state.playback_running.load(Ordering::Relaxed) {
+        return Err("Playback is running — stop it before testing".into());
+    }
+
+    let dmx     = state.dmx.clone();
+    let profile = state.profile.lock().clone();
+
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        for i in 0..120u64 {
+            // Build a static show-like test packet for each profile
+            let pkt: [u8; 16] = match profile {
+                LaserProfile::EytseEY003L => {
+                    let mut ch = [0u8; 16];
+                    ch[0]  = 120; // CH1: Mode — DMX control
+                    ch[1]  = 0;   // CH2: Pattern group 0
+                    ch[2]  = 100; // CH3: Pattern choice mid-range
+                    ch[3]  = 0;   // CH4: No strobe
+                    ch[4]  = 128; // CH5: X center
+                    ch[5]  = 128; // CH6: Y center
+                    ch[6]  = 200; // CH7: X zoom
+                    ch[7]  = 190; // CH8: Y zoom
+                    ch[8]  = 220; // CH9: Multi-color
+                    ch[9]  = ((i * 2) % 255) as u8; // CH10: Rotating
+                    ch[10] = 0;   // CH11: No X roll
+                    ch[11] = 0;   // CH12: No Y roll
+                    ch[12] = 150; // CH13: Draw speed
+                    ch[13] = 200; // CH14: Pattern size
+                    ch[14] = 0;   // CH15: No segments
+                    ch[15] = 0;
+                    ch
+                }
+                LaserProfile::Generic7Channel | LaserProfile::Custom => {
+                    let mut ch = [0u8; 16];
+                    ch[0] = 100; // Mode
+                    ch[1] = 80;  // Pattern
+                    ch[2] = 0;   // No strobe
+                    ch[3] = 200; // Zoom
+                    ch[4] = 128; // X center
+                    ch[5] = 128; // Y center
+                    ch[6] = ((i * 2) % 255) as u8; // Color cycling
+                    ch
+                }
+            };
+
+            let _ = dmx.send_packet(&pkt);
+
+            // Pace to 40 Hz
+            let next_ms = (i + 1) * 25;
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            if elapsed_ms < next_ms {
+                std::thread::sleep(Duration::from_millis(next_ms - elapsed_ms));
+            }
+        }
+        // All-zeros to park the laser after the test
+        let _ = dmx.send_packet(&[0u8; 16]);
+    });
+
+    Ok(())
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Entry point
 // ──────────────────────────────────────────────────────────────────────────────
@@ -256,6 +325,7 @@ fn main() {
             get_current_envelopes,
             start_playback,
             stop_playback,
+            test_dmx_burst,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
