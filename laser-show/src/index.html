@@ -233,6 +233,44 @@
           <span id="strategy-text"></span>
         </div>
 
+        <!-- Test burst button -->
+        <div class="test-burst-row">
+          <button id="btn-test-burst" class="btn-ghost">
+            ⚡ Send Test Burst (3 s)
+          </button>
+          <span id="test-burst-status" class="test-burst-status"></span>
+        </div>
+
+        <!-- AI Show Director -->
+        <div class="ai-director-section">
+          <div class="ai-director-header">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00ff9d" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+            <span class="ai-director-title">AI Show Director</span>
+            <span class="ai-director-sub">Describe your show · AI sets all parameters</span>
+            <span id="ai-active-badge" class="ai-active-badge hidden">● active</span>
+          </div>
+
+          <div id="ai-messages" class="ai-messages">
+            <div id="ai-empty-state" class="ai-empty-state">
+              <p>Tell the AI what kind of show you want and it will configure the laser parameters.</p>
+              <p class="ai-quick-label">Quick starts — click to use:</p>
+              <div id="ai-quick-prompts" class="ai-quick-prompts">
+                <button class="ai-quick-btn" data-prompt="🔥 Aggressive EDM — fast strobes, hard cuts on bass drops">🔥 Aggressive EDM — fast strobes, hard cuts on bass drops</button>
+                <button class="ai-quick-btn" data-prompt="🌊 Slow and hypnotic — wide sweeps, smooth colour fades">🌊 Slow &amp; hypnotic — wide sweeps, smooth colour fades</button>
+                <button class="ai-quick-btn" data-prompt="⚡ Full chaos — max everything, push the laser hard">⚡ Full chaos — max everything, push the laser hard</button>
+                <button class="ai-quick-btn" data-prompt="🎯 Simple and clean — one or two patterns, no strobe">🎯 Simple &amp; clean — one or two patterns, no strobe</button>
+                <button class="ai-quick-btn" data-prompt="🌈 Colour wash only — no movement, reactive colour changes">🌈 Colour wash only — reactive colour changes</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="ai-input-row">
+            <input id="ai-input" type="text" placeholder="Describe your show or click a quick start…" />
+            <button id="ai-send" class="btn-ai-send">↵</button>
+          </div>
+          <div id="ai-api-status" class="ai-api-status hidden"></div>
+        </div>
+
       </section>
 
       <!-- PREVIEW PANEL -->
@@ -285,6 +323,21 @@
           </label>
           <button id="btn-reconnect" class="btn-primary">Apply &amp; Reconnect</button>
           <button id="btn-disconnect" class="btn-ghost btn-danger">Disconnect</button>
+        </div>
+
+        <div class="settings-group" style="margin-top:1.5rem">
+          <h3 style="font-size:.75rem;text-transform:uppercase;letter-spacing:.1em;color:#666;margin-bottom:.75rem">AI Director</h3>
+          <label>
+            <span>AI API URL</span>
+            <input id="settings-ai-url" type="text"
+              placeholder="https://your-app.replit.app"
+              class="manual-port-input" />
+          </label>
+          <p style="font-size:.7rem;color:#555;margin-top:.35rem;line-height:1.5">
+            Paste the URL of your deployed AI LaserShow web app. The AI Director calls <code>/api/laser/chat</code> on that server. Leave blank to disable AI chat.
+          </p>
+          <button id="btn-save-ai-url" class="btn-ghost" style="margin-top:.5rem">Save</button>
+          <span id="ai-url-saved" style="font-size:.7rem;color:#00ff9d;margin-left:.5rem;display:none">✓ Saved</span>
         </div>
       </section>
 
