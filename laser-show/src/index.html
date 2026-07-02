@@ -138,6 +138,7 @@
         <button class="nav-item" data-panel="channels">Channels</button>
         <button class="nav-item" data-panel="settings">Settings</button>
         <button class="nav-item" data-panel="library">Library</button>
+        <button class="nav-item" data-panel="zone">Zone Map</button>
       </nav>
 
       <div class="hw-status">
@@ -214,18 +215,24 @@
           <canvas id="spectrum-canvas" class="spectrum-canvas"></canvas>
           <div class="envelope-bars">
             <div class="env-bar">
-              <div class="env-fill" id="bar-bass" style="background:#ff3300"></div>
-              <span>BASS</span>
+              <div class="env-fill" id="bar-bass"></div>
+              <span>B</span>
             </div>
             <div class="env-bar">
-              <div class="env-fill" id="bar-mid" style="background:#00ff9d"></div>
-              <span>MID</span>
+              <div class="env-fill" id="bar-mid"></div>
+              <span>M</span>
             </div>
             <div class="env-bar">
-              <div class="env-fill" id="bar-high" style="background:#aa44ff"></div>
-              <span>HIGH</span>
+              <div class="env-fill" id="bar-high"></div>
+              <span>H</span>
             </div>
           </div>
+        </div>
+
+        <!-- Live laser banner — shown when playing -->
+        <div id="laser-live-banner" class="laser-live-banner hidden">
+          <span class="laser-live-dot"></span>
+          LIVE — SENDING TO LASER
         </div>
 
         <!-- Strategy note strip (AI show notes) -->
@@ -361,6 +368,61 @@
           <p>No shows saved yet. Use the <strong>💾 Save</strong> button in the AI Director to save your current show.</p>
         </div>
         <div id="library-list" class="library-list"></div>
+      </section>
+
+      <!-- ZONE MAP PANEL -->
+      <section id="panel-zone" class="panel">
+        <h2>Safety Zone Mapper</h2>
+        <p class="sub">Block cells where you don't want the laser to shine — windows, people, surfaces, equipment.</p>
+
+        <div class="zone-enable-row">
+          <label class="zone-toggle-wrap">
+            <input type="checkbox" id="zone-enabled-toggle">
+            <span class="zone-toggle-slider"></span>
+            <span class="zone-toggle-text">Zone masking <span id="zone-enabled-label">OFF</span></span>
+          </label>
+          <span id="zone-stats" class="zone-stats-badge">96 / 96 active</span>
+        </div>
+
+        <div class="zone-how-to">
+          <strong>How to use:</strong> Point your laser at the target surface. Click any grid cell to block it (red ✕ = laser won't shine there). The laser output is scaled to only illuminate the active green area.
+        </div>
+
+        <div class="zone-toolbar">
+          <button class="btn-ghost btn-sm" id="zone-select-all">✓ All On</button>
+          <button class="btn-ghost btn-sm" id="zone-clear-all">✕ All Off</button>
+          <button class="btn-ghost btn-sm" id="zone-invert">⇄ Invert</button>
+          <div class="zone-toolbar-sep"></div>
+          <button class="btn-ghost btn-sm zone-preview-btn" id="zone-project">⚡ Preview Field</button>
+        </div>
+
+        <div class="zone-grid-outer">
+          <div class="zone-axis-label zone-axis-left">TOP</div>
+          <div class="zone-axis-label zone-axis-right">BOTTOM</div>
+          <div class="zone-grid-col">
+            <div class="zone-axis-top-row">
+              <span>LEFT</span><span>CENTER</span><span>RIGHT</span>
+            </div>
+            <div id="zone-grid" class="zone-grid"></div>
+            <div class="zone-pct-row">
+              <span id="zone-pct" class="zone-pct">100% of output field active</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="zone-presets-section">
+          <div class="zone-presets-header">
+            <span class="zone-section-title">Zone Presets</span>
+            <button class="btn-ghost btn-sm" id="zone-save-preset">💾 Save Zone</button>
+          </div>
+          <div id="zone-presets-list" class="zone-presets-list">
+            <p class="muted-hint">No saved zones yet.</p>
+          </div>
+        </div>
+
+        <div class="zone-safety-notice">
+          ⚠️ Zone masking is a <strong>software-level</strong> safety aid and does not replace hardware interlock systems. Follow all applicable laser safety regulations for your venue and jurisdiction.
+        </div>
       </section>
 
     </main>
