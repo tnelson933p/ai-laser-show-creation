@@ -700,3 +700,212 @@ $('btn-disconnect').addEventListener('click', async () => {
   hwDot.className     = 'dot disconnected';
   hwLabel.textContent = 'Not connected';
 });
+
+// ── Test burst ────────────────────────────────────────────────────────────────
+const btnTestBurst    = $('btn-test-burst');
+const testBurstStatus = $('test-burst-status');
+
+if (btnTestBurst) {
+  btnTestBurst.addEventListener('click', async () => {
+    btnTestBurst.disabled = true;
+    testBurstStatus.textContent = 'Sending…';
+    testBurstStatus.style.color = '#ffcd56';
+    try {
+      await invoke('test_dmx_burst');
+      testBurstStatus.textContent = '✓ 120 frames sent — watch the laser';
+      testBurstStatus.style.color = '#43d9a3';
+      setTimeout(() => {
+        testBurstStatus.textContent = '';
+        btnTestBurst.disabled = false;
+      }, 4000);
+    } catch (e) {
+      testBurstStatus.textContent = '✗ ' + e;
+      testBurstStatus.style.color = '#ff6584';
+      btnTestBurst.disabled = false;
+    }
+  });
+}
+
+// ── AI Show Director ──────────────────────────────────────────────────────────
+const aiMessages   = $('ai-messages');
+const aiEmptyState = $('ai-empty-state');
+const aiInput      = $('ai-input');
+const aiSend       = $('ai-send');
+const aiApiStatus  = $('ai-api-status');
+const aiActiveBadge= $('ai-active-badge');
+
+let aiChatHistory  = [];
+let aiStreaming     = false;
+let aiApiUrl        = localStorage.getItem('ai-lasershow-api-url') || '';
+let aiShowOverrides = {};
+
+// Restore API URL setting
+const settingsAiUrl = $('settings-ai-url');
+const btnSaveAiUrl  = $('btn-save-ai-url');
+const aiUrlSaved    = $('ai-url-saved');
+
+if (settingsAiUrl) settingsAiUrl.value = aiApiUrl;
+
+if (btnSaveAiUrl) {
+  btnSaveAiUrl.addEventListener('click', () => {
+    aiApiUrl = (settingsAiUrl?.value || '').trim().replace(/\/$/, '');
+    localStorage.setItem('ai-lasershow-api-url', aiApiUrl);
+    if (aiUrlSaved) {
+      aiUrlSaved.style.display = 'inline';
+      setTimeout(() => { aiUrlSaved.style.display = 'none'; }, 2000);
+    }
+  });
+}
+
+// Quick prompts
+document.querySelectorAll('.ai-quick-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (aiInput) {
+      aiInput.value = btn.dataset.prompt;
+      aiInput.focus();
+    }
+  });
+});
+
+function aiShowStatus(msg, isError = false) {
+  if (!aiApiStatus) return;
+  if (!msg) { aiApiStatus.classList.add('hidden'); return; }
+  aiApiStatus.textContent = msg;
+  aiApiStatus.style.color = isError ? '#ff6584' : '#43d9a3';
+  aiApiStatus.classList.remove('hidden');
+}
+
+function appendAiMessage(role, content, settingsApplied) {
+  if (aiEmptyState) aiEmptyState.style.display = 'none';
+  const el = document.createElement('div');
+  el.className = role === 'user' ? 'ai-msg-user' : 'ai-msg-assistant';
+  el.textContent = content || '';
+  if (settingsApplied && Object.keys(settingsApplied).length > 0) {
+    const badge = document.createElement('div');
+    badge.className = 'ai-msg-applied';
+    badge.textContent = '✓ Updated: ' + Object.keys(settingsApplied).join(', ');
+    el.appendChild(badge);
+  }
+  aiMessages.appendChild(el);
+  aiMessages.scrollTop = aiMessages.scrollHeight;
+  return el;
+}
+
+async function sendAiMessage() {
+  if (!aiInput || !aiInput.value.trim() || aiStreaming) return;
+  const text = aiInput.value.trim();
+  aiInput.value = '';
+
+  if (!aiApiUrl) {
+    aiShowStatus('⚠ Set your AI API URL in Settings → AI Director to enable chat.', true);
+    return;
+  }
+
+  aiStreaming = true;
+  if (aiSend) aiSend.disabled = true;
+  aiShowStatus('');
+
+  appendAiMessage('user', text);
+  aiChatHistory.push({ role: 'user', content: text });
+
+  const placeholderEl = appendAiMessage('assistant', '');
+  placeholderEl.innerHTML = '<span class="ai-thinking">thinking…</span>';
+
+  const laser = getLaser(state.brand, state.model);
+
+  try {
+    const resp = await fetch(`${aiApiUrl}/api/laser/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        laser: laser ? {
+          brand: state.brand,
+          model: state.model,
+          channelCount: laser.channels,
+          colorMode: laser.colorMode,
+          scanTier: laser.scanTier,
+          availableColors: [],
+          specialFeatures: [],
+          maxPowerMw: laser.mW,
+          notes: laser.notes,
+        } : null,
+        messages: aiChatHistory,
+        currentSettings: aiShowOverrides,
+        musicContext: state.bpm ? {
+          bpm: state.bpm,
+          duration: state.duration,
+          isPlaying: state.playing,
+        } : undefined,
+      }),
+    });
+
+    if (!resp.ok || !resp.body) throw new Error(`API error ${resp.status}`);
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let accumulated = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.error) throw new Error(data.error);
+          if (data.content) {
+            accumulated += data.content;
+            // Strip JSON fences for display
+            const display = accumulated
+              .replace(/```json[\s\S]*?```/g, '')
+              .replace(/```[\s\S]*?```/g, '')
+              .trim();
+            placeholderEl.textContent = display || accumulated;
+          }
+          if (data.done) {
+            // Parse any trailing JSON settings block
+            const match = accumulated.match(/```json\s*([\s\S]*?)\s*```/);
+            let settings = null;
+            if (match) {
+              try { settings = JSON.parse(match[1]); } catch { /* ignore */ }
+            }
+            const displayText = accumulated
+              .replace(/```json[\s\S]*?```/g, '')
+              .replace(/```[\s\S]*?```/g, '')
+              .trim();
+
+            placeholderEl.textContent = displayText || accumulated;
+
+            if (settings && Object.keys(settings).length > 0) {
+              aiShowOverrides = { ...aiShowOverrides, ...settings };
+              if (aiActiveBadge) aiActiveBadge.classList.remove('hidden');
+              const badge = document.createElement('div');
+              badge.className = 'ai-msg-applied';
+              badge.textContent = '✓ Updated: ' + Object.keys(settings).join(', ');
+              placeholderEl.appendChild(badge);
+            }
+
+            aiChatHistory.push({ role: 'assistant', content: accumulated });
+          }
+        } catch (parseErr) { /* skip malformed SSE lines */ }
+      }
+    }
+  } catch (e) {
+    placeholderEl.textContent = 'Error: ' + e.message;
+    placeholderEl.style.color = '#ff6584';
+    aiShowStatus('Connection failed — check the AI API URL in Settings.', true);
+  } finally {
+    aiStreaming = false;
+    if (aiSend) aiSend.disabled = false;
+    aiMessages.scrollTop = aiMessages.scrollHeight;
+  }
+}
+
+if (aiSend)  aiSend.addEventListener('click', sendAiMessage);
+if (aiInput) aiInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(); }
+});
