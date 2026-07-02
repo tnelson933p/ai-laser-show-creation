@@ -82,7 +82,7 @@ Keep the response focused, expert-level, and under 300 words. Use specific numbe
 // Streams SSE. AI may embed <settings>{...}</settings> to update show params.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/laser/chat", async (req, res) => {
-  const { laser, messages, currentSettings, musicContext } = req.body as {
+  const { laser, messages, currentSettings, musicContext, zoneInfo } = req.body as {
     laser: {
       brand: string; model: string; channelCount: number;
       colorMode: string; scanTier: string;
@@ -109,10 +109,18 @@ router.post("/laser/chat", async (req, res) => {
         level: string;
       }>;
     };
+    zoneInfo?: {
+      enabled: boolean;
+      activeCells: number;
+      totalCells: number;
+      activePercent: number;
+      bounds: { minX: number; maxX: number; minY: number; maxY: number };
+      description: string;
+    };
   };
 
-  if (!laser || !messages?.length) {
-    res.status(400).json({ error: "laser and messages are required" });
+  if (!messages?.length) {
+    res.status(400).json({ error: "messages are required" });
     return;
   }
 
@@ -317,17 +325,82 @@ animationCode: string — JavaScript canvas code for this scene's visual
   ctx.closePath();ctx.globalAlpha=0.6+energy*.35;ctx.stroke();
   for(let ring=1;ring<4;ring++){ctx.globalAlpha=(0.4-ring*.08)*(0.3+bass*.5);ctx.beginPath();for(let i=0;i<=80;i++){const a=i/80*Math.PI*2;const r=R*(.55+energy*.2)*heartPulse*(1+ring*.18);const hx=cx+r*(Math.sin(a)**3)*1.2;const hy=cy-r*(.85*Math.cos(a)-.35*Math.cos(2*a)-.12*Math.cos(3*a)-.07*Math.cos(4*a));i?ctx.lineTo(hx,hy):ctx.moveTo(hx,hy);}ctx.closePath();ctx.stroke();}
 
-  THESE ARE STARTING POINTS ONLY. Invent something completely original every scene.
-  Running horse. Neon cityscape. Waterfall. Fire tornado. Solar system. Two dancers.
-  Thunder and lightning. A blooming flower. Rain of meteors. A spinning top.
-  Make every scene feel like a completely different visual universe — nothing ever repeated.
+  // [ALL] Galloping horse — built from parts: head, neck, body, four legs with knee joints
+  const gx=cx+Math.sin(t*.9)*R*.45, gy=cy+Math.cos(t*1.1)*R*.12;
+  const stride=Math.sin(t*5.8+beat*Math.PI*2), bounce=Math.abs(Math.sin(t*5.8))*R*.06;
+  // Head + neck
+  ctx.beginPath();ctx.arc(gx+R*.52,gy-R*.46-bounce,R*.1,0,Math.PI*2);ctx.stroke(); // head
+  ctx.beginPath();ctx.moveTo(gx+R*.48,gy-R*.36-bounce);ctx.lineTo(gx+R*.34,gy-R*.18-bounce);ctx.stroke(); // neck
+  ctx.beginPath();ctx.moveTo(gx+R*.56,gy-R*.52-bounce);ctx.lineTo(gx+R*.7,gy-R*.5-bounce);ctx.stroke(); // ear
+  // Body
+  ctx.beginPath();ctx.moveTo(gx-R*.38,gy);ctx.bezierCurveTo(gx-R*.2,gy-R*.3-bounce,gx+R*.18,gy-R*.3-bounce,gx+R*.38,gy-R*.04);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(gx-R*.38,gy);ctx.bezierCurveTo(gx-R*.2,gy+R*.15,gx+R*.18,gy+R*.15,gx+R*.38,gy-R*.04);ctx.stroke();
+  // Tail
+  ctx.beginPath();ctx.moveTo(gx-R*.38,gy+R*.04);ctx.quadraticCurveTo(gx-R*.58+stride*R*.12,gy-R*.12,gx-R*.68+stride*R*.18,gy+R*.22);ctx.stroke();
+  // Four legs — alternating stride pairs
+  const legs=[[-R*.22,1],[-R*.08,-1],[R*.14,1],[R*.28,-1]];
+  legs.forEach(([lx,ph])=>{
+    const s=Math.sin(t*5.8+ph*Math.PI*.5)*R*.28, ky=gy+R*.22, fy=gy+R*.52;
+    ctx.beginPath();ctx.moveTo(gx+lx,gy+R*.12);ctx.lineTo(gx+lx+s*.3,ky);ctx.lineTo(gx+lx+s*.5,fy);ctx.stroke(); // leg+knee
+    ctx.beginPath();ctx.moveTo(gx+lx+s*.5,fy);ctx.lineTo(gx+lx+s*.5+R*.04,fy+R*.04);ctx.stroke(); // hoof
+  });
+  ctx.globalAlpha=0.4+energy*.4;
+
+  // [ALL] Blooming flower — petals grow on bass, spin on beat, each petal is a bezier lobe
+  const petals=7, bloom=0.4+energy*.6+Math.max(0,1-beat*5)*bass*.35;
+  for(let p=0;p<petals;p++){
+    const pa=p/petals*Math.PI*2+t*.25, pr=R*(.5*bloom);
+    const px=cx+Math.cos(pa)*pr*.55, py=cy+Math.sin(pa)*pr*.55;
+    ctx.globalAlpha=(0.5+energy*.35)*(0.7+Math.sin(t*2+p)*.3);
+    ctx.beginPath();
+    ctx.moveTo(cx,cy);
+    ctx.bezierCurveTo(
+      cx+Math.cos(pa-0.5)*pr,cy+Math.sin(pa-0.5)*pr,
+      cx+Math.cos(pa+0.5)*pr,cy+Math.sin(pa+0.5)*pr,
+      px*2-cx,py*2-cy
+    );
+    ctx.stroke();
+  }
+  // Stamen — rings at center
+  for(let r=1;r<4;r++){
+    ctx.globalAlpha=0.3+bass*.5;
+    ctx.beginPath();ctx.arc(cx,cy,R*(.07*r+bass*.05),0,Math.PI*2);ctx.stroke();
+  }
+
+  // [ALL] Fire column — stacked flickering flame lobes, bass drives height, high drives flicker
+  const flames=5, fbase=cy+R*.55;
+  for(let f=0;f<flames;f++){
+    const ft=t*2.8+f*.6, fh=R*(.32+energy*.38-f*.06)*(1-f*.14);
+    const fw=R*(.22-f*.03)*(0.7+bass*.5);
+    const fx=cx+Math.sin(ft*.7+f)*R*.04*(f+1);
+    const flicker=Math.sin(ft*3.2+f*2.1)*fw*.3;
+    ctx.globalAlpha=(0.7-f*.1)*(0.4+bass*.5+Math.sin(ft*high*4)*.15);
+    ctx.beginPath();
+    ctx.moveTo(fx-fw,fbase-f*fh*.5);
+    ctx.bezierCurveTo(fx-fw*.6+flicker,fbase-f*fh*.5-fh*.5,fx+flicker,fbase-f*fh*.5-fh,fx,fbase-f*fh*.5-fh*(1.2+high*.3));
+    ctx.bezierCurveTo(fx+flicker,fbase-f*fh*.5-fh,fx+fw*.6+flicker,fbase-f*fh*.5-fh*.5,fx+fw,fbase-f*fh*.5);
+    ctx.stroke();
+  }
+  // Ember sparks — fly upward on beat
+  const eSpark=Math.max(0,1-beat*4)*bass;
+  for(let e=0;e<8;e++){
+    const ea=(e/8)*Math.PI*2+t, er=R*(.08+Math.sin(t*3+e)*.06)*eSpark;
+    ctx.globalAlpha=eSpark*(0.4+Math.random()*.4);
+    ctx.beginPath();ctx.arc(cx+Math.cos(ea)*er,fbase-R*(.25+e*.06+eSpark*.35),R*.012,0,Math.PI*2);ctx.stroke();
+  }
+
+  THESE ARE STARTING POINTS ONLY. Every scene must invent something the existing library cannot do.
+  Approach every object like a character: give it a body, joints, secondary motion, breath.
+  A horse has four jointed legs with hooves. A fire has lobes with flicker and rising embers.
+  A flower has petals that unfurl one by one and a stamen that pulses.
+  Think about WHAT THE OBJECT DOES, not just what it looks like.
   ─────────────────────────────────────────────────────
 
   ★ HARDWARE CONSTRAINTS — YOUR CODE MUST RESPECT THESE OR THE SHOW BREAKS ★
   ─────────────────────────────────────────────────────
-  Laser: ${laser.brand} ${laser.model} | Scanner: ${laser.scanTier} | Colors: ${(laser.availableColors ?? []).join(", ")} | Mode: ${laser.colorMode}${laser.maxPowerMw ? ` | ${laser.maxPowerMw}mW` : ""}
+  Laser: ${laser ? `${laser.brand} ${laser.model} | Scanner: ${laser.scanTier} | Colors: ${(laser.availableColors ?? []).join(", ")} | Mode: ${laser.colorMode}${laser.maxPowerMw ? ` | ${laser.maxPowerMw}mW` : ""}` : "Unknown — design for a mid-tier scanner, moderate path counts"}
 
-${laser.scanTier === "budget" ? `  BUDGET SCANNER (8–12 KPPS) — STRICT PATH LIMITS
+${!laser || laser.scanTier === "budget" ? `  BUDGET SCANNER (8–12 KPPS) — STRICT PATH LIMITS
   • Max ~60 points per stroke call (each loop iteration = 1 point)
   • Max 3 separate stroke calls per scene total
   • Forbidden: dense spirals, fine particles, high-res beziers, large loop counts
@@ -343,7 +416,7 @@ ${laser.scanTier === "budget" ? `  BUDGET SCANNER (8–12 KPPS) — STRICT PATH 
   • Complex spirals, dense particles, fine 3D geometry — all safe
   • This scanner renders anything you can imagine at full frame rate`}
 
-${laser.colorMode === "rgb" || laser.colorMode === "rgb-full" ? `  COLOR: RGB FULL — 'color' carries the active laser color (engine picks it, you pick shapes)
+${!laser || laser.colorMode === "rgb" || laser.colorMode === "rgb-full" ? `  COLOR: RGB FULL — 'color' carries the active laser color (engine picks it, you pick shapes)
   • Design for one vivid color at a time — high contrast shapes read best
   • At choruses/peaks: pair with gratingEnabled:true to fan the colored beam across the room` : laser.colorMode === "indexed" ? `  COLOR: INDEXED PALETTE (${(laser.availableColors ?? []).join(", ")})
   • 'color' reflects the active indexed slot — design for any single color
@@ -383,10 +456,21 @@ Current show settings: ${JSON.stringify(currentSettings, null, 2)}`;
 
   const systemPrompt = `You are a world-class laser show director. You have designed shows for EDC, Coachella, Super Bowl halftimes, stadium tours, NYE Times Square, and Burning Man. Your shows make audiences gasp. You do not play it safe — you are bold, unexpected, and cinematic.
 
-Laser: ${laser.brand} ${laser.model} | ${laser.channelCount}ch DMX | Colors: ${(laser.availableColors ?? []).join(", ")} | Scanner: ${laser.scanTier}
-Notes: ${(laser.notes as string | undefined) ?? "none"}
-Features: ${(laser.specialFeatures ?? []).join(" | ") || "standard"}
+Laser: ${laser ? `${laser.brand} ${laser.model} | ${laser.channelCount}ch DMX | Colors: ${(laser.availableColors ?? []).join(", ")} | Scanner: ${laser.scanTier}` : "Unknown hardware — design for mid-tier scanner"}
+Notes: ${laser ? ((laser.notes as string | undefined) ?? "none") : "none"}
+Features: ${laser ? ((laser.specialFeatures ?? []).join(" | ") || "standard") : "standard"}
 ${musicSection}
+${zoneInfo ? `
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SAFETY ZONE ACTIVE — ${zoneInfo.activePercent}% of output field
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The user has set a safety zone mask. The DMX mapper will automatically constrain beam position channels.
+Zone location: ${zoneInfo.description}
+Active cells: ${zoneInfo.activeCells} of ${zoneInfo.totalCells}
+Design all scenes AS IF this zone IS the full canvas — the hardware will clip to it.
+For sweeps and animations: prefer movements that stay within the active region.
+If the zone is small (<40%), keep patterns tighter (lower panRange/tiltRange).
+` : ""}
 
 ${settingsDoc}
 
@@ -535,6 +619,26 @@ TEXT IS THE CLIMAX MOMENT: When the key lyric or title appears as text, the anim
 PUSH THE MEDIUM: Each scene should attempt something the pre-built library cannot do.
   A horse galloping. Fire rising. A city at night. An aurora. A beating heart. A solar system.
   Code it from scratch. Push the canvas API to its limit.
+
+OBJECT ANIMATION PRINCIPLES — how to make things feel alive:
+  ANATOMY FIRST: Break every object into its physical parts and draw each separately.
+    Horse = head (arc) + neck (line) + body (two beziers) + 4 jointed legs + tail (quadratic)
+    Fire = 5 overlapping lobe beziers stacked vertically, each flickering at different speeds
+    Flower = 7 petal beziers from center + stamen rings + stem line
+    Bird = body ellipse + two bezier wings that flap + tail fork + beak line
+    Person = head arc + spine + shoulder bar + hip bar + upper+lower arm+leg segments each
+  SECONDARY MOTION: Nothing moves in isolation. Add subtle secondary movements.
+    Horse body bounces slightly as legs stride. Tail swings opposite to gait.
+    Fire lobes wobble left/right at different frequencies. Embers drift upward on beat.
+    Flower petals breathe in/out independently. Stem sways slightly.
+  WEIGHT & PHYSICS: Animate as if gravity and inertia exist.
+    Heavy things: settle on bass hit, lag behind, overshoot and spring back.
+    Light things: flutter, drift, react instantly to high frequencies.
+    Use Math.sin(t*freq+phase) with different frequencies per part for organic motion.
+  BEAT-LOCKING: One element must react sharply on EVERY beat.
+    Use Math.max(0, 1 - beat*5) for sharp attack → instant decay.
+    Crowd arms snap up on beat. Fire surges. Horse hooves hit ground. Petals flash open.
+  ALWAYS STROKE, NEVER FILL — laser only traces paths. Plan shapes as outlines.
 
 EVENT PALETTES — specific animationCode ideas by genre/event:
   EDC / Festival EDM: tunnel vortex, geometric fractals, particle explosions, morphing polygons
